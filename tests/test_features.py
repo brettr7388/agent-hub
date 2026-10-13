@@ -59,7 +59,7 @@ class FeaturesCase(unittest.TestCase):
         body = {'agent_id': 'assistant', 'name': 'Check', 'prompt': 'Inspect local notes.', 'trigger': 'interval', 'minutes': 5}
         routine = self.h.create_routine(body)['routine']
         self.assertEqual(routine['next_run'], now + 300)
-        self.assertIn('Routine created', self.h.history('agent:assistant')['messages'][-1]['text'])
+        self.assertIn('Schedule created', self.h.history('agent:assistant')['messages'][-1]['text'])
         self.responses('assistant', [{'result': 'SILENT'}])
         self.assertEqual(self.h.tick_routines(now+299), 0)
         self.assertEqual(self.h.tick_routines(now+300), 1)

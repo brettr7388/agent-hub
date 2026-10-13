@@ -42,7 +42,7 @@
       const anchor = node('a', '', name); anchor.href = url; anchor.target = '_blank'; anchor.rel = 'noopener noreferrer'; downloads.append(anchor);
     });
     devices.append(downloads);
-    const prepare = addStep(steps, 'Prepare the private phone address.', 'On the supported macOS or Linux Hub computer, open Terminal in the Agent Hub folder and run the command below. It prints a tailscale serve command. Run that exact command in Terminal, then restart Agent Hub. The HTTPS link appears in the terminal and in Settings → General → Phone setup after restart.');
+    const prepare = addStep(steps, 'Prepare the private phone address.', 'On the supported macOS or Linux Hub computer, open Terminal in the Agent Hub folder and run the command below. It prints a tailscale serve command. Run that exact command in Terminal, then stop Agent Hub (Ctrl-C in its Terminal) and start it again with python3 hub.py. The HTTPS link appears in the terminal and in Settings → General → Phone setup after restart.');
     const command = node('div', 'phone-command'); command.append(node('code', '', 'python3 hub.py --tailscale'));
     const commandCopy = node('button', 'secondary', 'Copy command'); commandCopy.type = 'button';
     commandCopy.addEventListener('click', async () => {

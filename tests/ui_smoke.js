@@ -7,9 +7,10 @@ const path = require('node:path');
 class Node {
   constructor(tag = 'div') { this.tagName = tag; this.className = ''; this.classList = { add: (name) => { this.className = [...new Set([...this.className.split(' ').filter(Boolean), name])].join(' '); }, remove: (name) => { this.className = this.className.split(' ').filter((part) => part !== name).join(' '); }, contains: (name) => this.className.split(' ').includes(name), toggle: (name, force) => { const on = force === undefined ? !this.classList.contains(name) : force; this.classList[on ? 'add' : 'remove'](name); return on; } }; this.children = []; this.dataset = {}; this.events = {}; this._text = ''; this.hidden = false; this.open = false; this.disabled = false; this.isConnected = true; this.style = { setProperty(name, value) { this[name] = value; }, removeProperty(name) { delete this[name]; } }; this.rect = { left: 20, top: 20, right: 120, bottom: 64, width: 100, height: 44 }; this.offsetHeight = 180; }
   set textContent(value) { this._text = String(value); this.children = []; }
-  set innerHTML(value) { if (this.tagName !== 'template' || !/^<svg class="pip-avatar" [\s\S]*<\/svg>$/.test(value)) throw new Error('Unexpected HTML'); this.content = { firstElementChild: new Node('svg') }; this.content.firstElementChild.className = 'pip-avatar'; }
+  set innerHTML(value) { if (this.tagName !== 'template' || !/^<svg class="pip-avatar" [\s\S]*<\/svg>$/.test(value)) throw new Error('Unexpected HTML'); this.content = { firstElementChild: new Node('svg') }; this.content.firstElementChild.className = 'pip-avatar'; this.content.firstElementChild.source = value; }
   get textContent() { return this._text + this.children.map((child) => child.textContent).join(''); }
   append(...children) { children.forEach((child) => { if (child?.tagName === '#fragment') this.append(...child.children); else { if (child && typeof child === 'object') child.parent = this; this.children.push(child); } }); }
+  insertBefore(child, anchor) { if (child.parent) child.parent.children = child.parent.children.filter((item) => item !== child); const index = anchor ? this.children.indexOf(anchor) : this.children.length; if (index < 0) throw new Error('Anchor is not a child'); child.parent = this; this.children.splice(index, 0, child); }
   prepend(...children) { children.forEach((child) => { child.parent = this; this.children.unshift(child); }); }
   get childNodes() { return this.children; }
   get options() { return this.children.filter((child) => child.tagName === 'option'); }
@@ -27,6 +28,7 @@ class Node {
   close() { this.open = false; }
   scrollIntoView(options) { this.scrolledWith = options; }
   setAttribute(name, value) { this[name] = value; }
+  removeAttribute(name) { delete this[name]; }
   querySelectorAll(selector) { return this.children.flatMap((child) => [child, ...child.querySelectorAll(selector)]).filter((child) => selector.split(',').some((part) => part.startsWith('.') ? child.className?.split(' ').includes(part.slice(1)) : part === '[data-settings-tab]' ? !!child.dataset.settingsTab : part === '[data-settings-panel]' ? !!child.dataset.settingsPanel : part.startsWith('[name=') ? child.name === part.slice(6, -1) : child.tagName === part)); }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   findText(text) { return this.textContent.includes(text); }
@@ -54,8 +56,8 @@ const timers = [];
 const setTimeoutFake = (callback, ms) => { const timer = { callback, ms, cancelled: false }; timers.push(timer); return timer; };
 const clearTimeoutFake = (timer) => { if (timer) timer.cancelled = true; };
 let source = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
-source = source.replace(/  setup\(\);[\s\S]*\}\)\(\);\s*$/, '  window.HubApp = { api, post, refreshState, openChat, showToast, prepareTeam }; globalThis.__test = { revealReactions, resizeComposer, data, seconds, chatTime, quotedText, approvalsDrafts, hasUnread, modelSelect, engineLabel, api, messageNode, renderSwarmResults, renderApprovals, submitApprovalsReview, checkApprovalsDecision, showSwarmError, clearSwarmError, renderWorkers, openApprovals, onPaletteKeydown, paletteEntries, sendMessage, askEveryone, connectEvents, renderDeltas, closeDelta, reconcileMessages, openChat, refreshState, loadSetup, showCoach, positionCoach, closeCoach, addReply, renderReply, selectSettingsTab, react, openTeam, renderSwarmWorkers, setWorkerAgent, renderEmpty, renderHeader, renderSend, renderRoutines, agentSettings, plainInline, confirmationText, teamResultCard, updateCard, navButton, renderNav, setSidebarCollapsed, toggleMenu, closeMenus, pipPicker, readPipPicker, proposalCard, guideStarters, editProposal, proposalDecision, windowedRows, navSections, renderDirectory, archiveDirectory, pipRole, quotePreview, withoutSpeakerPrefix, friendlyFolder, shouldWelcome, dismissWelcome, idleCheck, startSession, exportFile, visibleHandoffText, openGettingStartedGuide, settingsTabKeydown, openSettings };\n})();');
-source = source.replace('globalThis.__test = {', 'globalThis.__test = { setupSidebarSearch, ');
+source = source.replace(/  setup\(\);[\s\S]*\}\)\(\);\s*$/, '  window.HubApp = { api, post, refreshState, openChat, showToast, prepareTeam }; globalThis.__test = { openMessageMenu, closeMessagePopover, resizeComposer, data, seconds, chatTime, quotedText, approvalsDrafts, hasUnread, modelSelect, engineLabel, api, messageNode, renderSwarmResults, renderApprovals, submitApprovalsReview, checkApprovalsDecision, showSwarmError, clearSwarmError, renderWorkers, openApprovals, onPaletteKeydown, paletteEntries, sendMessage, askEveryone, connectEvents, renderDeltas, closeDelta, reconcileMessages, openChat, refreshState, loadSetup, showCoach, positionCoach, closeCoach, addReply, renderReply, selectSettingsTab, react, openTeam, renderSwarmWorkers, setWorkerAgent, renderEmpty, renderHeader, renderSend, renderRoutines, agentSettings, plainInline, confirmationText, teamResultCard, updateCard, navButton, renderNav, setSidebarCollapsed, toggleMenu, closeMenus, pipPicker, readPipPicker, proposalCard, guideStarters, editProposal, proposalDecision, windowedRows, navSections, renderDirectory, archiveDirectory, pipRole, quotePreview, withoutSpeakerPrefix, friendlyFolder, shouldWelcome, dismissWelcome, idleCheck, startSession, exportFile, visibleHandoffText, openGettingStartedGuide, settingsTabKeydown, openSettings };\n})();');
+source = source.replace('globalThis.__test = {', 'globalThis.__test = { setupComposerInteractions, stopResponse, positionToast, setupSidebarSearch, showLogin, sendFeel, inlineAction, appActionDialog, showCreatedToast, mergeSentMessages, retrySentMessage, markAgentSeen, ');
 let eventSource;
 class FakeEventSource { constructor() { this.listeners = {}; eventSource = this; } addEventListener(name, callback) { this.listeners[name] = callback; } close() {} }
 FakeEventSource.CLOSED = 2;
@@ -63,6 +65,7 @@ let nextRequestId = 0;
 const context = { document, location: { origin: 'http://localhost' }, localStorage: {}, history: {}, navigator: { onLine: true }, window: { innerWidth: 1440, innerHeight: 900 }, matchMedia: () => ({ matches: false }), requestAnimationFrame: (callback) => callback(), Event, Intl, Date, Number, String, URL, Headers, console, crypto: { randomUUID: () => `request-${++nextRequestId}` }, EventSource: FakeEventSource, setTimeout: setTimeoutFake, clearTimeout: clearTimeoutFake };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'static', 'markdown.js'), 'utf8'), context);
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'static', 'pips.js'), 'utf8'), context);
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'static', 'access.js'), 'utf8'), context);
 vm.runInNewContext(source, context);
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'static', 'onboarding.js'), 'utf8'), context);
 const { data, chatTime, quotedText, approvalsDrafts, hasUnread, modelSelect, renderApprovals, submitApprovalsReview } = context.__test;
@@ -117,9 +120,11 @@ context.__test.settingsTabKeydown({key:'ArrowRight', currentTarget:settingTabs[3
 assert.equal(settingTabs[0]['aria-selected'], 'true');
 // B4-4: Retry has a distinct icon while Reply still quotes the same message.
 const actionMessage = context.__test.messageNode({id:901,role:'assistant',text:'Answer'});
-const retryAction = walk(actionMessage).find(n=>n['aria-label']==='Retry answer');
+context.__test.openMessageMenu({id:901,role:'assistant',text:'Answer'}, actionMessage);
+const retryAction = walk(body).find(n=>n['aria-label']==='Retry answer');
 assert.equal(walk(retryAction).find(n=>n.tagName==='use').href, '#i-retry');
 assert.equal(walk(walk(actionMessage).find(n=>n['aria-label']==='Reply')).find(n=>n.tagName==='use').href, '#i-reply');
+context.__test.closeMessagePopover();
 // B4-5: one empty state, with no duplicate empty running sections.
 data.jobs=[]; data.workers={running:[],done:[]}; context.__test.renderWorkers();
 assert.equal(document.getElementById('workersBody').querySelectorAll('.worker-section').length,0);
@@ -140,7 +145,7 @@ assert.match(select.options[0].title, /Fast everyday work/);
 data.setup = { engines: { claude: { available: true, authenticated: 'ready' }, codex: { available: false } } };
 assert.equal(context.__test.engineLabel('claude'), 'Claude Code — signed in');
 assert.match(context.__test.engineLabel('codex'), /Not installed.*Help/);
-assert.ok(context.__test.messageNode({ id: 50, role: 'user', text: 'hello', acknowledged: true }).findText('👀 Seen'));
+assert.ok(context.__test.messageNode({ id: 50, role: 'user', text: 'hello', acknowledged: true }).findText('Seen'));
 data.messages = [{ id: 7, role: 'user', text: 'Please plan today' }];
 assert.equal(context.__test.messageNode({ id: 51, role: 'assistant', reply_to: 7, text: 'Here is a plan' }).findText('Please plan today'), false, 'assistant reply does not echo the user message');
 data.messages = [{ id: 11, role: 'assistant', agent_id: 'first', text: 'First' }, { id: 12, role: 'assistant', agent_id: 'first', text: 'Second' }];
@@ -186,8 +191,8 @@ const briefAll = context.__test.messageNode({ id: 32, role: 'assistant', agent_i
 assert.equal(walk(briefAll).filter((n) => n.className === 'group-show-more').length, 0, 'short @all answer has no Show more');
 data.chatId = null; data.chats = [];
 const reactionNode = context.__test.messageNode({ id: 54, role: 'assistant', text: 'Ready', reactions: ['👍'] });
-assert.ok(walk(reactionNode).some((n) => n.className === 'reaction-chip' && n.textContent === '👍'), 'saved reaction appears');
-assert.ok(walk(reactionNode).some((n) => n.className === 'reaction-button' && n.title === 'More reactions'), 'more reaction picker control');
+assert.ok(walk(reactionNode).some((n) => n.classList.contains('reaction-chip') && n.textContent === '👍'), 'saved reaction appears');
+assert.equal(walk(reactionNode).filter((n) => n.className === 'reaction-button').length, 0, 'picker is floating, not part of each message');
 const swipe = context.__test.messageNode({ id: 55, role: 'assistant', text: 'Swipe me' });
 const pointer = (x, y, id = 1) => ({ pointerType: 'touch', clientX: x, clientY: y, pointerId: id, target: { closest: () => null } });
 const replyCount = data.replyTo.length;
@@ -216,10 +221,32 @@ context.__test.reconcileMessages();
 assert.ok(!document.getElementById('messageList').findText('Retry'), 'retry controls disappear when usage hold clears');
 const settingsBody = new Node();
 context.__test.agentSettings(settingsBody, { id: 'first', name: 'Ava', title: 'Writer', emoji: '✍️', model: 'haiku', engine: 'claude', instructions: 'Write clearly', workdir: '/tmp/project' });
-assert.ok(settingsBody.findText('Instructions') && settingsBody.findText('Can use my Chrome') && settingsBody.findText('Draft only'), 'agent settings expose instructions and permissions');
+assert.ok(settingsBody.findText('Instructions') && settingsBody.findText('Private Pip') && settingsBody.findText('Can use Pip browser') && settingsBody.findText('Draft only'), 'agent settings expose instructions, access modes and the Pip browser');
+const modeForm = settingsBody.querySelector('form');
+const modePrivate = modeForm.querySelector('[name=private_pip]'), modeDraft = modeForm.querySelector('[name=draft_only]'), modeBrowser = modeForm.querySelector('[name=chrome]');
+modeBrowser.checked = true; modePrivate.checked = true; modePrivate.events.change();
+assert.equal(modeBrowser.disabled, true, 'Private disables Pip browser immediately');
+assert.equal(modeBrowser.checked, false, 'Private clears an enabled Pip browser');
+modePrivate.checked = false; modePrivate.events.change(); modeBrowser.checked = true; modeDraft.checked = true; modeDraft.events.change();
+assert.equal(modeBrowser.disabled, true, 'Draft only disables Pip browser immediately');
+assert.equal(modeBrowser.checked, false, 'Draft only clears an enabled Pip browser');
+modeDraft.checked = false; modeDraft.events.change();
+assert.equal(modeBrowser.disabled, false, 'full access restores the Pip browser option');
 const externalSettings = new Node();
 context.__test.agentSettings(externalSettings, { id: 'external', name: 'Outside', external: true, role: 'Read only' });
-assert.ok(externalSettings.findText('read only') && walk(externalSettings).filter((n) => n.tagName === 'input').every((n) => n.disabled), 'imported agent settings are read only');
+assert.ok(externalSettings.findText('read only') && externalSettings.querySelector('[name=instructions]').disabled, 'imported source settings are read only');
+assert.ok(!externalSettings.querySelector('[name=private_pip]').disabled && !externalSettings.querySelector('[name=draft_only]').disabled, 'imported Pip access can be changed');
+const requestCard = { kind: 'approval_request', index: 0, title: 'Send DM', text: '<script>exact text</script>', actions: ['Approve', "Don't"] };
+const requestMessage = { id: 97, chat_id: 'agent:first', role: 'assistant', agent_id: 'first', text: 'Please review.', cards: [requestCard] };
+const requestNode = context.__test.messageNode(requestMessage);
+assert.equal(requestNode.querySelector('.message-body').textContent, 'Please review.', 'backend-normalized approval message displays its remaining text');
+assert.equal(requestNode.querySelector('.approval-request-details').textContent, '<script>exact text</script>', 'exact details are literal text');
+assert.deepEqual(requestNode.querySelector('.approval-request-actions').querySelectorAll('button').map((item) => item.textContent), ['Approve', "Don't"]);
+const quotedFence = '> ```agent-hub\n> {"action":"approval_request","summary":"quoted","details":"keep me"}\n> ```';
+const quotedWithCard = context.__test.messageNode({ ...requestMessage, id: 99, text: quotedFence });
+assert.ok(quotedWithCard.findText('agent-hub') && quotedWithCard.findText('keep me'), 'a quoted fence stays visible beside a separate stored card');
+const malformedRequest = context.__test.messageNode({ id: 98, role: 'assistant', agent_id: 'first', text: '```agent-hub\nnot json\n```' });
+assert.ok(malformedRequest.findText('not json'), 'malformed fence remains ordinary safe message text');
 data.swarms = [{ id: 'sample', goal: 'Octopus facts', shape: 'race', workers: [{ number: 1, role: 'Helper 1', status: 'pass', terminal: true, answer: 'An octopus has three hearts.', evidence: 'Technical evidence', report: 'PASS: verified' }] }];
 context.__test.renderSwarmResults();
 const teamCard = document.getElementById('swarmResults').children[0].children.find((child) => child.className === 'list-card team-answer');
@@ -284,29 +311,55 @@ require('./markdown_smoke.js');
   // This DOM harness has no layout engine. CSS size contracts are checked in test_ui.py.
   const payloads = [];
   context.location.hash = ''; context.location.pathname = '/';
-  context.fetch = async (url, options = {}) => { if (options.body) payloads.push({ url, body: JSON.parse(options.body) }); return { ok: true, status: 200, json: async () => url === '/api/state' ? { agents: [], chats: [], statuses: [] } : {} }; };
+  context.fetch = async (url, options = {}) => { if (options.body) payloads.push({ url, method: options.method, body: JSON.parse(options.body) }); return { ok: true, status: 200, json: async () => url === '/api/state' ? { agents: [], chats: [], statuses: [] } : {} }; };
   const agentForm = settingsBody.querySelector('form');
   agentForm.querySelector('[name=name]').value = 'Ava Renamed';
   agentForm.querySelector('[name=instructions]').value = 'Write precise copy.';
-  agentForm.querySelector('[name=chrome]').checked = true;
+  agentForm.querySelector('[name=private_pip]').checked = true;
   agentForm.querySelector('[name=draft_only]').checked = true;
+  agentForm.querySelector('[name=private_pip]').events.change();
+  assert.equal(agentForm.querySelector('[name=chrome]').disabled, true, 'Private Pip disables Pip browser');
   await agentForm.events.submit({ preventDefault() {} });
   const savedAgent = payloads.find((request) => request.url === '/api/agents/update')?.body;
   assert.equal(savedAgent.name, 'Ava Renamed');
   assert.equal(savedAgent.instructions, 'Write precise copy.');
-  assert.equal(savedAgent.chrome, true);
+  assert.equal(savedAgent.chrome, false, 'managed settings persist the disabled browser flag');
+  assert.equal(savedAgent.use_global_rules, undefined, 'legacy global-rules flag is not submitted');
+  assert.equal(savedAgent.private_pip, true);
   assert.equal(savedAgent.draft_only, true);
+  assert.equal(payloads.some((request) => request.url === '/api/agents/first'), false, 'managed settings save atomically in one request');
   assert.equal(savedAgent.workdir, '/tmp/project');
+  await requestNode.querySelector('.approval-request-actions').querySelectorAll('button')[0].click();
+  const cardDecision = payloads.find((request) => request.url === '/api/card')?.body;
+  assert.equal(cardDecision.message_id, 97);
+  assert.equal(cardDecision.index, 0);
+  assert.equal(cardDecision.action, 'Approve');
+  const linkedAccess = externalSettings.querySelector('.pip-access-form');
+  linkedAccess.querySelector('[name=private_pip]').checked = true;
+  linkedAccess.querySelector('[name=draft_only]').checked = true;
+  await linkedAccess.events.submit({preventDefault(){}});
+  const linkedPatch = payloads.find((request) => request.url === '/api/agents/external')?.body;
+  assert.deepEqual(linkedPatch, {private_pip:true,draft_only:true}, 'linked access uses PATCH fields');
+  assert.equal(payloads.find((request) => request.url === '/api/agents/external').method, 'PATCH');
   context.fetch = async () => ({ok:false,status:400,json:async()=>({error:'Working folder must be inside your home folder.'})});
   await agentForm.events.submit({preventDefault(){}});
   assert.ok(agentForm.findText('Working folder must be inside your home folder.'), 'save error appears in agent form');
   assert.equal(agentForm.querySelector('[name=workdir]')['aria-invalid'],'true','invalid workdir is marked');
   assert.equal(agentForm.querySelector('.form-error').scrolledWith.block,'nearest','save error scrolls beside button');
-  assert.ok(!externalSettings.querySelector('form').events.submit, 'imported settings have no save action');
+  assert.ok(!externalSettings.querySelector('form').events.submit, 'imported source settings have no save action');
+  assert.ok(externalSettings.querySelector('.pip-access-form').events.submit, 'imported Pip access can be saved');
   const linkedSettings=new Node();context.__test.agentSettings(linkedSettings,{id:'linked',name:'Linked',linked:true,instructions:'Source instructions'});
   assert.ok(linkedSettings.findText('Linked Pip') && linkedSettings.querySelector('[name=instructions]').value==='Source instructions','linked instructions are shown read only');
-  assert.ok(!linkedSettings.querySelector('form').events.submit,'linked settings cannot be saved');
-  data.authenticated = true; data.messages = []; data.chatId = 'group:design'; data.statuses = [];
+  assert.ok(!linkedSettings.querySelector('form').events.submit,'linked source settings cannot be saved');
+  assert.ok(linkedSettings.querySelector('.pip-access-form').events.submit,'linked Pip access can be saved');
+  data.authenticated = true; data.messages = []; data.chatId = 'agent:first'; data.statuses = [];
+  data.agents = [{id:'first', name:'Ava', engine:'claude', model:'haiku', private_pip:true, draft_only:true}];
+  data.chats = [{id:'agent:first', name:'Ava', type:'direct', agents:['first']}];
+  context.__test.renderHeader();
+  assert.deepEqual(document.getElementById('pipAccessChips').children.map((item) => item.textContent), ['Private', 'Draft only']);
+  data.agents[0].private_pip = false; data.agents[0].draft_only = false; context.__test.renderHeader();
+  assert.equal(document.getElementById('pipAccessChips').textContent, 'Full access');
+  data.chatId = 'group:design';
   data.agents = [{id:'first', name:'Ava', engine:'claude', model:'haiku', title:'Research'}, {id:'second', name:'Ben', engine:'codex', model:'gpt-6-luna', title:'Build'}];
   data.chats = [{id:'group:design', name:'Design', type:'group', agents:['first','second']}];
   data.settings = {};
@@ -352,7 +405,8 @@ require('./markdown_smoke.js');
   assert.equal(document.getElementById('conversation').classList.contains('is-empty'), false, 'first message docks composer');
   assert.ok(document.getElementById('messageList').children.find((node) => node.dataset.messageId === '202').classList.contains('continued-run'), 'same-agent run hides repeated heading');
   data.statuses = [{id:99,chat_id:'agent:first',status:'working'}]; context.__test.renderSend();
-  assert.equal(document.getElementById('sendButton')['aria-label'], 'Stop response', 'stop replaces send');
+  assert.equal(document.getElementById('sendButton')['aria-label'], 'Send message', 'send always sends');
+  assert.equal(document.getElementById('stopButton').hidden, false, 'active response has a separate Stop button');
   const stopCalls = [];
   data.statuses.push({id:100,chat_id:'group:elsewhere',agent_id:'first',status:'working'});
   document.getElementById('messageInput').value = 'Keep my draft';
@@ -361,7 +415,7 @@ require('./markdown_smoke.js');
     const result = url === '/api/state' ? {agents:data.agents,chats:data.chats,statuses:[]} : url === '/api/product' ? {getting_started:{completed:true}} : {};
     return {status:200,ok:true,json:async () => result};
   };
-  await context.__test.sendMessage({preventDefault(){}});
+  await context.__test.stopResponse();
   assert.deepEqual(Array.from(stopCalls, (call) => call.job_id), [99], 'Stop only cancels the current chat');
   assert.equal(document.getElementById('messageInput').value, 'Keep my draft', 'Stop preserves the draft');
   data.statuses = []; context.__test.renderSend();
@@ -464,7 +518,8 @@ require('./markdown_smoke.js');
   };
   const firstSend = context.__test.sendMessage({ preventDefault() {} });
   assert.equal(messageCalls.length, 0, 'send waits until first chat finishes loading');
-  assert.equal(input.value, 'My first question', 'draft survives while chat loads');
+  assert.equal(input.value, '', 'composer clears immediately while the chat finishes loading');
+  assert.ok(document.getElementById('messageList').findText('My first question'), 'optimistic bubble is visible before posting');
   releaseChat(true);
   await firstSend;
   assert.equal(messageCalls.length, 1, 'first message is posted once when ready');
@@ -491,7 +546,8 @@ require('./markdown_smoke.js');
   input.value = 'Keep this draft'; data.chatReady = { id: data.chatId, promise: Promise.resolve(true) };
   context.fetch = async () => { throw new Error('Network failed'); };
   await context.__test.sendMessage({ preventDefault() {} });
-  assert.equal(input.value, 'Keep this draft', 'failed send preserves the draft');
+  assert.equal(input.value, '', 'failed send stays in its bubble while composer remains clear');
+  assert.ok(document.getElementById('messageList').findText('Not delivered · Retry'), 'failed bubble has a retry action');
   assert.equal(document.getElementById('toast').textContent, 'Network failed', 'failed send gives a visible error');
   assert.equal(composer.dataset.pending, 'false');
 
@@ -519,7 +575,7 @@ require('./markdown_smoke.js');
   assert.equal(data.chatId, 'agent:first', 'late pre-creation state cannot close the new chat after the creation marker clears');
 
   data.authenticated = true;
-  data.messages = []; data.deltas.clear(); data.closedDeltas.clear();
+  data.messages = []; data.deltas.clear(); data.closedDeltas.clear(); context.__test.sendFeel.optimistic.clear(); context.__test.sendFeel.finishing.clear();
   document.getElementById('messageList').replaceChildren();
   context.fetch = async () => new Promise(() => {});
   context.__test.connectEvents();
@@ -528,8 +584,8 @@ require('./markdown_smoke.js');
   assert.ok(document.getElementById('messageList').findText('Partial ans'), 'partial answer appears live');
   assert.equal(document.getElementById('messageList').querySelectorAll('.streaming-message').length, 1);
   change({ kind: 'message', job_id: 9, chat_id: 'agent:first' });
-  assert.equal(document.getElementById('messageList').querySelectorAll('.streaming-message').length, 0, 'final message event removes draft');
-  data.messages = [{ id: 99, role: 'assistant', agent_id: 'first', text: 'Final answer' }];
+  assert.equal(document.getElementById('messageList').querySelectorAll('.streaming-message').length, 1, 'final event retains draft until authoritative reply arrives');
+  data.messages = [{ id: 99, role: 'assistant', agent_id: 'first', text: 'Final answer', job_id:9 }];
   context.__test.reconcileMessages();
   assert.ok(document.getElementById('messageList').findText('Final answer'), 'stored final answer replaces draft');
   change({ kind: 'delta', job_id: 9, chat_id: 'agent:first', agent_id: 'first', text: 'Late partial' });
@@ -554,7 +610,7 @@ require('./markdown_smoke.js');
   const button = new Node('button'), reacted = { id: 88, role: 'assistant', reactions: [] };
   await context.__test.react(reacted, '👍', button);
   assert.equal(reactionCalls.length, 2, 'approval reaction previews then confirms');
-  assert.equal(confirmationText, 'Approve Draft?', 'confirmation names the actual action, preserving case');
+  assert.equal(confirmationText, undefined, 'primary approval never opens a browser dialog');
   assert.equal(reactionCalls[0].active, true, 'reaction requests desired state');
   assert.ok(reactionCalls[0].request_id && reactionCalls[0].request_id !== reactionCalls[1].request_id, 'preview and confirm use separate request IDs');
   assert.equal(reactionCalls[1].confirm, true, 'confirmation sent to guarded backend');
@@ -562,7 +618,7 @@ require('./markdown_smoke.js');
   reactionCalls.length=0;
   context.fetch=async (url,options={})=>{reactionCalls.push(JSON.parse(options.body));return {ok:true,status:200,json:async()=>reactionCalls.length===1?{confirmation_required:true,action:'Create',title:'Writer'}:{reactions:['✅']}};};
   await context.__test.react({id:89,role:'assistant',reactions:[]},'✅',new Node('button'));
-  assert.equal(confirmationText,'Create Writer?','Guide reaction confirms the same named primary action');
+  assert.equal(confirmationText,undefined,'Guide reaction creates without a browser dialog');
   assert.equal(reactionCalls[1].confirm,true,'Guide reaction confirms through reaction endpoint');
 
   // PASS 11: Pip styles keep their generated identity until the user edits the picker.
@@ -715,6 +771,8 @@ require('./markdown_smoke.js');
     const value = url === '/api/state' ? {agents:[guide],chats:data.chats,statuses:[]} : url === '/api/product' ? {getting_started:{completed:true}} : url.startsWith('/api/chat?') ? {messages:data.messages} : url === '/api/guide/demo' ? {demo_chat_id:'group:demo'} : {ok:true};
     return {ok:true,status:200,json:async()=>value}; };
   await context.__test.archiveDirectory();
+  assert.equal(guideCalls.filter((x)=>x.url==='/api/archive').length,0,'first tap only arms inline archive');
+  await context.__test.archiveDirectory();
   assert.deepEqual(guideCalls.find((x)=>x.url==='/api/archive').body,{kind:'agent',id:'pip-0'},'bulk archive posts the selected Pip');
   assert.equal(data.directorySelected.size,0,'archived selection clears after refresh');
   data.hiddenAgents=[{id:'hidden-linked',name:'Hidden linked',linked:true,archived:true}];
@@ -741,7 +799,7 @@ require('./markdown_smoke.js');
   const pending = {...proposal,status:'pending'};
   const create = context.__test.proposalCard(pending,proposalMessage).querySelectorAll('button').find((n)=>n.textContent==='Create');
   const firstCreate = create.click(); const secondCreate = create.click(); await Promise.all([firstCreate,secondCreate]);
-  assert.equal(confirmationText,'Create Writer?','tapping Create uses the same confirmation text as a reaction');
+  assert.equal(confirmationText,undefined,'tapping Create never opens a browser dialog');
   assert.equal(guideCalls.filter((x)=>x.url==='/api/guide/proposal').length,1,'double click creates only once');
   assert.deepEqual(guideCalls.find((x)=>x.url==='/api/guide/proposal').body,{message_id:301,index:2,action:'create'},'Create sends the indexed proposal decision');
   guideCalls.length = 0;
@@ -829,7 +887,7 @@ require('./markdown_smoke.js');
   data.agents=[{id:'guide',name:'Guide',guide:true}];data.directorySelected=new Set(['guide']);document.getElementById('directoryArchive').disabled=false;
   let archiveRequests=0;context.fetch=async()=>{archiveRequests++;return {ok:true,status:200,json:async()=>({})};};
   context.confirm=(message)=>{confirmationText=message;return false;};await context.__test.archiveDirectory();
-  assert.equal(archiveRequests,0,'declining Guide bulk-archive warning leaves it in place');assert.ok(confirmationText.includes('Archive Guide?'));
+  assert.equal(archiveRequests,0,'first Guide archive tap leaves it in place');assert.equal(document.getElementById('directoryArchive').textContent,'Confirm archive?');
   const idleCalls=[];data.authenticated=true;
   context.fetch=async(url)=>{idleCalls.push(url);return {ok:true,status:200,json:async()=>({authenticated:true})};};
   await context.__test.idleCheck();assert.deepEqual(idleCalls,['/api/session'],'idle thirty-second check makes one request, no worker/jobs polling');
@@ -837,22 +895,14 @@ require('./markdown_smoke.js');
   context.fetch=async(url)=>{initialCalls.push(url);return {ok:true,status:200,json:async()=>({authenticated:false})};};
   await context.__test.startSession();assert.deepEqual(initialCalls,['/api/session'],'logged-out load never requests protected state');
   const downloads=[];const oldClick=Node.prototype.click;Node.prototype.click=function(){if(this.tagName==='a')downloads.push(this.href);return oldClick.call(this);};
-  context.confirm=(message)=>{confirmationText=message;return false;};context.__test.exportFile('/api/export/everything');
+  const cancelledExport=context.__test.exportFile('/api/export/everything');
   assert.equal(downloads.length,0,'declining export warning does not download');
-  assert.equal(confirmationText, "Exports include your chat text. Review before sharing — we redact obvious secrets but can't catch everything.");
-  context.confirm=()=>true;context.__test.exportFile('/api/export/chat?format=md');context.__test.exportFile('/api/export/chat?format=json');context.__test.exportFile('/api/export/everything');
+  assert.ok(context.__test.sendFeel.dialog.findText("Exports include your chat text."));
+  context.__test.sendFeel.dialog.querySelectorAll('button').find((n)=>n.textContent==='Cancel').click();await cancelledExport;
+  for(const url of ['/api/export/chat?format=md','/api/export/chat?format=json','/api/export/everything']) { const exporting=context.__test.exportFile(url);context.__test.sendFeel.dialog.querySelector('form').events.submit({preventDefault(){}});await exporting; }
   assert.equal(downloads.length,3,'all export formats share the confirmation boundary');Node.prototype.click=oldClick;
   // PASS 16: readable table quote chips, reaction visibility, compact autosizing and Jobs copy.
   assert.equal(context.__test.quotePreview('| **Dish** | Protein |\n| --- | ---: |\n| Tofu | 20g |', ''), 'Dish · Protein Tofu · 20g');
-  const reactionTarget = new Node('article'), reactionPicker = new Node('div');
-  reactionPicker.className = 'reaction-bar'; reactionTarget.append(reactionPicker);
-  const viewport16 = elements.get('messageViewport'), composer16 = elements.get('composer');
-  viewport16.rect = {top:70,bottom:650}; composer16.rect = {top:490,bottom:760};
-  reactionPicker.rect = {top:475,bottom:525}; viewport16.scrollTop = 100;
-  context.__test.revealReactions(reactionTarget);
-  assert.equal(viewport16.scrollTop, 143, 'picker scrolls fully above quote/composer bar plus spacing');
-  reactionPicker.rect = {top:300,bottom:350}; context.__test.revealReactions(reactionTarget);
-  assert.equal(viewport16.scrollTop, 143, 'visible picker does not move');
   const input16 = elements.get('messageInput');
   input16.scrollHeight = 38; context.__test.resizeComposer(); assert.equal(input16.style.height, '38px');
   input16.scrollHeight = 160; context.__test.resizeComposer(); assert.equal(input16.style.height, '160px');

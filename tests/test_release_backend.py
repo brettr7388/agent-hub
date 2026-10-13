@@ -65,19 +65,21 @@ class PublicBackend(unittest.TestCase):
         self.h.config['external_agent_dirs'] = [str(source.parent)]
         agent = next(a for a in self.h.agents().values() if a.get('linked'))
         aid = agent['id']
-        before = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+        before = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file() and p.name != 'fake_calls.jsonl'}
         with self.assertRaises(hub.HubError): self.h.edit_agent({'id': aid, 'instructions': 'mutate'})
         self.h.sync_chats()
         sent = self.h.send({'chat_id': 'agent:' + aid, 'text': 'hello', 'request_id': 'linked-chat-test'})
         test_hub.poll(lambda: self.h.db.execute('SELECT status FROM jobs WHERE id=?', (sent['job_id'],)).fetchone()[0] == 'done')
-        self.assertTrue((self.h.data / 'linked-workspaces' / aid).is_dir())
+        calls = [json.loads(line) for line in (source / 'fake_calls.jsonl').read_text().splitlines()]
+        self.assertEqual(calls[-1]['cwd'], str(source))
+        self.assertIn('--chrome', calls[-1]['argv'])
         self.h.archive({'kind': 'agent', 'id': aid})
         self.assertNotIn(aid, self.h.agents())
         self.assertEqual(self.h.state()['hidden_agents'][0]['id'], aid)
         self.h.unarchive({'id': aid})
         self.assertIn(aid, self.h.agents())
         self.assertTrue(self.h.history('agent:' + aid)['messages'])
-        after = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+        after = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file() and p.name != 'fake_calls.jsonl'}
         self.assertEqual(before, after)
 
     def test_guide_reactions_create_once_through_confirmed_card(self):
@@ -152,8 +154,7 @@ class PublicBackend(unittest.TestCase):
         with mock.patch('hub.Path.home', return_value=self.root / 'home'):
             (self.root / 'home').mkdir()
             created = self.h.create_agent({'name': 'Portable', 'role': 'x'})['agent']
-            self.assertEqual(created['workdir'], str(self.root / 'home'))
-            self.h.edit_agent({'id': created['id'], 'workdir': created['workdir']})
+            self.assertEqual(created['workdir'], str(self.root / 'agents' / 'portable'))
 
     def test_task_answer_strips_protocol_and_scratch_has_no_merge(self):
         self.assertEqual(self.h.worker_answer('**Answer:** A practical plan.\n**Status:** PASS\n**Evidence:** checked\n**Files:** None.'), 'A practical plan.')

@@ -59,6 +59,11 @@ class LockedDatabase:
             cursor = self._connection.executescript(sql)
             cursor.close()
 
+    def create_function(self, name, arguments, function, deterministic=False):
+        with self.lock:
+            self._files.check()
+            self._connection.create_function(name, arguments, function, deterministic=deterministic)
+
     def commit(self):
         with self.lock:
             self._files.check()

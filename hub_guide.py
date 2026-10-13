@@ -6,6 +6,7 @@ import re
 import secrets
 
 from hub_conversation import valid_emoji
+from hub_pips import style_for
 
 CODEX_MODELS = ('gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra')
 FENCE = re.compile(r'```agent-hub\s*\n([\s\S]*?)\n```', re.I)
@@ -13,12 +14,15 @@ GREETING = ("Hi, I'm Guide. Tell me what you'd like help with and I'll sketch a 
             "for you to review. Nothing is created until you choose Create. Want to try the Chef and Critic demo?")
 STARTERS = ('Make me a Pip that…', 'Set up a group for…', 'What can you do?', 'Try the Chef and Critic demo')
 GUIDE_ROLE = ("You are Guide, the Agent Hub starter. Help the owner make agents, groups, and team tasks. "
-              "Ask at most 1–2 brief clarifying questions, then propose. You are draft-only: never create, edit, "
-              "run, or contact anything yourself. The Hub presents your proposals for owner approval. "
+              "Ask at most 1–2 brief clarifying questions, then propose. Present workspace creation as proposals "
+              "for owner approval. For other tasks use your normal session tools. "
               "Choose a short, meaningful name that says what the Pip does. "
               "For each proposal output exactly one fenced agent-hub JSON block. Agent: "
               "{\"action\":\"create_agent\",\"name\":\"...\",\"emoji\":\"🧩\",\"title\":\"...\","
-              "\"instructions\":\"...\",\"engine\":\"claude\",\"model\":\"haiku\",\"workdir\":null}. "
+              "\"instructions\":\"...\",\"engine\":\"claude\",\"workdir\":null,\"chrome\":false}. "
+              "Omit model to use the Hub default unless the owner explicitly asks for another model. "
+              "For browser-enabled Pips, include in their instructions: use only the Pip browser for accounts "
+              "the Pip signs into, and ask the owner before sending any message or submission. "
               "Group: {\"action\":\"create_group\",\"name\":\"...\",\"emoji\":\"👥\","
               "\"agents\":[\"Existing Agent\",{agent proposal}]}. "
               "Team task: {\"action\":\"start_team_task\",\"group\":\"Group name\","
@@ -30,6 +34,10 @@ GUIDE_ROLE = ("You are Guide, the Agent Hub starter. Help the owner make agents,
 def error(status, message):
     from hub import HubError
     raise HubError(status, message)
+
+
+BROWSER_SAFETY = ('Use only the Pip browser for accounts you sign into. '
+                  'Ask the owner before sending any message or submission.')
 
 
 def validate_model(hub, engine, model):
@@ -78,7 +86,7 @@ def proposal(hub, item, depth=0, allow_team_options=False):
         title = item.get('title', '')
         emoji = item.get('emoji', '🧩')
         engine = item.get('engine') or hub.default_engine()
-        model = item.get('model') or ('haiku' if engine == 'claude' else 'gpt-6-luna')
+        model = item.get('model') or hub.config.get('default_model' if engine == 'claude' else 'default_codex_model', 'haiku' if engine == 'claude' else 'gpt-6.1-sol')
         if not isinstance(name, str) or not name.strip() or len(name) > 60 or not re.sub(r'[^a-z0-9]+', '', name.lower()) or not isinstance(instructions, str) or not instructions.strip() or len(instructions) > 4000 or not isinstance(title, str) or len(title) > 100 or not valid_emoji(emoji):
             error(400, 'Invalid agent proposal.')
         if name.strip().casefold() == 'pip':
@@ -88,10 +96,27 @@ def proposal(hub, item, depth=0, allow_team_options=False):
         avatar_style = item.get('avatar_style', 'pip')
         if avatar_style not in ('pip', 'emoji'): error(400, 'Choose an avatar style.')
         pip_style = validate_pip(item.get('pip_style'))
+        for key in ('private_pip', 'draft_only', 'chrome'):
+            if key in item and type(item[key]) is not bool: error(400, 'Choose Pip permissions.')
+        if item.get('chrome') and (item.get('private_pip') or item.get('draft_only')):
+            error(400, 'Pip browser requires Private Pip and Draft only to be off.')
+        if item.get('chrome') and BROWSER_SAFETY not in instructions:
+            instructions = instructions.strip() + '\n\n' + BROWSER_SAFETY
+            if len(instructions) > 4000:
+                error(400, 'Leave room in browser-enabled instructions for the account and sending rules.')
+        if not pip_style:
+            # Persist the exact deterministic style that create_agent would
+            # choose, so the proposal preview and the created Pip agree.
+            aid = re.sub(r'[^a-z0-9]+', '-', name.strip().lower()).strip('-')
+            existing = [a.get('pip_style') for a in hub.agents(include_hidden=True).values()
+                        if a.get('pip_style')]
+            pip_style = style_for({'id': aid, 'name': name.strip(), 'role': instructions.strip(),
+                                   'title': title.strip()}, existing)
         return {'action': action, 'name': name.strip(), 'emoji': emoji, 'title': title.strip(),
                 'instructions': instructions.strip(), 'engine': engine, 'model': model,
                 'workdir': str(workdir) if workdir else None, 'avatar_style': avatar_style,
-                'pip_style': pip_style}
+                'pip_style': pip_style,
+                **{key: item[key] for key in ('private_pip', 'draft_only', 'chrome') if key in item}}
     if action == 'create_group':
         name, emoji, members = item.get('name'), item.get('emoji', '👥'), item.get('agents')
         if not isinstance(name, str) or not name.strip() or len(name) > 80 or not valid_emoji(emoji) or not isinstance(members, list) or not 2 <= len(members) <= 30:
@@ -145,6 +170,52 @@ def proposal(hub, item, depth=0, allow_team_options=False):
 
 
 class GuideMixin:
+    def reset_guide_proposals_for_archive(self, kind, ident):
+        """Make an archived Guide creation actionable again in durable history.
+
+        Called while archive holds the Hub lock and before its commit so the
+        archive and card status cannot disagree after a restart.
+        """
+        guide_id = self.guide_id()
+        any_changed = False
+        for row in self.db.execute("SELECT id,cards FROM messages WHERE chat_id=? AND agent_id=? AND role='assistant'",
+                                   ('agent:' + guide_id, guide_id)).fetchall():
+            cards = json.loads(row['cards'])
+            changed = False
+            for card in cards:
+                if card.get('kind') != 'proposal' or card.get('status') != 'created':
+                    continue
+                result = card.get('result') or {}
+                target = result.get('agent') if kind == 'agent' else result.get('chat') if kind == 'group' else None
+                if isinstance(target, dict) and target.get('id') == ident:
+                    if kind == 'group':
+                        card['_created_member_ids'] = target.get('agents', [])
+                    receipt_id = card.pop('_creation_receipt_id', None)
+                    if receipt_id is not None:
+                        self.db.execute("UPDATE messages SET text=? WHERE id=? AND chat_id=? AND role='system'",
+                                        ('Creation undone.', receipt_id, self.guide_chat()))
+                    card['status'] = 'pending'
+                    card.pop('result', None)
+                    changed = True
+            if changed:
+                self.db.execute('UPDATE messages SET cards=? WHERE id=?', (json.dumps(cards), row['id']))
+                any_changed = True
+        return any_changed
+
+    def _reuse_guide_group_members(self, p, created_ids):
+        """Reuse surviving group children; Undo-archived children are recreated."""
+        if p['action'] != 'create_group' or not created_ids:
+            return p
+        agents = self.agents()
+        members = []
+        for item in p['agents']:
+            aid = re.sub(r'[^a-z0-9]+', '-', item['name'].lower()).strip('-') if isinstance(item, dict) else None
+            if aid in created_ids and aid in agents and agents[aid]['name'] == item['name']:
+                members.append(aid)
+            else:
+                members.append(item)
+        return dict(p, agents=members)
+
     def guide_id(self):
         return self._setting('guide_agent_id', 'guide')
 
@@ -159,6 +230,14 @@ class GuideMixin:
                     if existing['draft_only'] and existing['role'].startswith('You are Guide, the Agent Hub starter.'):
                         self._put_setting('guide_agent_id', 'guide')
                         self.db.commit()
+                existing = self.agents().get(self.guide_id())
+                old_rule = 'You are draft-only: never create, edit, run, or contact anything yourself. The Hub presents your proposals for owner approval.'
+                if (not self._setting('guide_access_v22', False) and existing and
+                        existing['role'].startswith('You are Guide, the Agent Hub starter.') and old_rule in existing['role']):
+                    self.edit_agent({'id': existing['id'], 'draft_only': False,
+                                     'role': existing['role'].replace(old_rule, 'Present workspace creation as proposals for owner approval. For other tasks use your normal session tools.')})
+                self._put_setting('guide_access_v22', True)
+                self.db.commit()
                 return
             guide_name = 'Guide' if 'guide' not in self.agents() else 'Guide Starter'
             if guide_name != 'Guide':
@@ -171,10 +250,11 @@ class GuideMixin:
             if not engine: engine = self.default_engine()
             model = 'haiku' if engine == 'claude' else 'gpt-6-luna'
             created = self.create_agent({'name': guide_name, 'emoji': '🧭', 'title': 'Makes Pips, groups and team tasks for you',
-                'role': GUIDE_ROLE, 'engine': engine, 'model': model, 'draft_only': True,
-                'use_global_rules': False, 'avatar_style': 'pip',
+                'role': GUIDE_ROLE, 'engine': engine, 'model': model,
+                'avatar_style': 'pip',
                 'pip_style': {'palette': 'blue', 'accessory': 'compass', 'eyes': 'dots', 'antenna': 'dot', 'visor': 'round'}})
             self._put_setting('guide_created', True)
+            self._put_setting('guide_access_v22', True)
             self._put_setting('guide_agent_id', created['agent']['id'])
             cid, aid = self.guide_chat(), self.guide_id()
             self.db.execute('INSERT OR IGNORE INTO chat_preferences(chat_id,pinned) VALUES(?,1)', (cid,))
@@ -192,10 +272,12 @@ class GuideMixin:
         def replace(match):
             try:
                 if len(match.group(1)) > 30000: return '[Proposal too long; ask Guide to make it shorter.]'
-                p = proposal(self, json.loads(match.group(1)))
+                parsed = json.loads(match.group(1))
+                if isinstance(parsed, dict) and parsed.get('action') == 'approval_request': return match.group(0)
+                p = proposal(self, parsed)
                 cards.append({'kind': 'proposal', 'proposal': p, 'status': 'pending'})
                 return ''
-            except (ValueError, TypeError): return '[Invalid proposal; ask Guide to try again.]'
+            except (ValueError, TypeError): return match.group(0)
             except Exception as exc:
                 from hub import HubError
                 if isinstance(exc, HubError): return '[Invalid proposal; ask Guide to try again.]'
@@ -222,6 +304,7 @@ class GuideMixin:
                 p = proposal(self, body.get('proposal', card['proposal']), allow_team_options='proposal' in body)
                 if p['action'] != card['proposal']['action']:
                     error(400, 'Edited proposal must keep its original action.')
+                p = self._reuse_guide_group_members(p, card.get('_created_member_ids', []))
                 self._preflight_guide_proposal(p)
                 # A crash after a filesystem or team side effect must never replay
                 # that effect on a second tap.
@@ -238,7 +321,9 @@ class GuideMixin:
                     self.emit('message', self.guide_chat())
                     raise
                 card['proposal'], card['status'], card['result'] = p, 'created', result
-                self.add_message(self.guide_chat(), self.guide_id(), 'system', p.get('name', 'Team task') + ' was created.')
+                card.pop('_created_member_ids', None)
+                card['_creation_receipt_id'] = self.add_message(
+                    self.guide_chat(), self.guide_id(), 'system', p.get('name', 'Team task') + ' was created.')
             self.db.execute('UPDATE messages SET cards=? WHERE id=?', (json.dumps(cards), mid))
             self.db.commit()
         self.emit('message', self.guide_chat())
@@ -272,7 +357,7 @@ class GuideMixin:
 
     def _create_guide_proposal(self, p):
         if p['action'] == 'create_agent':
-            return self.create_agent({**p, 'role': p['instructions'], 'draft_only': False})
+            return self.create_agent({**p, 'role': p['instructions']})
         if p['action'] == 'create_group':
             members = []
             for item in p['agents']:

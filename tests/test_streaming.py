@@ -51,7 +51,7 @@ class StreamingCase(unittest.TestCase):
                 self.assertEqual(replies, ['Final answer'])
                 if engine == 'claude':
                     call = json.loads((self.root / 'agents' / aid / 'fake_calls.jsonl').read_text().splitlines()[0])
-                    for flag in ('--include-partial-messages', '--verbose', '--safe-mode'):
+                    for flag in ('--include-partial-messages', '--verbose', '--chrome'):
                         self.assertIn(flag, call['argv'])
                 session = self.h.db.execute('SELECT sid FROM sessions WHERE chat_id=?', (cid,)).fetchone()
                 self.assertEqual(session[0], engine + '-session')

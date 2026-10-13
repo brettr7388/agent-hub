@@ -51,9 +51,9 @@ class Pass10Backend(unittest.TestCase):
         agent = self.h.create_agent({'name': 'Draft Writer', 'role': 'Write copy'})['agent']
         aid = agent['id']
         updated = self.h.edit_agent({'id': aid, 'name': 'Writer', 'role': 'Write crisp copy',
-                                     'chrome': True, 'draft_only': True, 'use_global_rules': True})['agent']
+                                     'chrome': False, 'draft_only': True, 'use_global_rules': True})['agent']
         self.assertEqual(updated['role'], 'Write crisp copy')
-        self.assertTrue(updated['chrome'])
+        self.assertFalse(updated['chrome'])
         self.assertTrue(updated['draft_only'])
         instructions = (Path(self.root) / 'agents' / aid / 'CLAUDE.md').read_text()
         self.assertIn('Write crisp copy', instructions)
@@ -67,6 +67,7 @@ class Pass10Backend(unittest.TestCase):
         self.assertEqual(self.h.history('agent:' + aid)['messages'][-1]['model'], 'haiku')
 
     def test_reaction_grace_and_local_only(self):
+        self.responses(self.aid, [{'result': 'I can write a draft for you.'}])
         self.done(self.send(text='hello')['job_id'])
         answer = next(m for m in self.h.history(self.cid)['messages'] if m['role'] == 'assistant')
         self.assertIsNone(self.h.react({'message_id': answer['id'], 'emoji': '❤️'})['job_id'])

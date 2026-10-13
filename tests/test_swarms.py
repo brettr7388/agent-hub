@@ -1,5 +1,6 @@
 """Swarm contract checks with fake CLI output and temporary Git checkouts."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,9 @@ class SwarmCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=str(scratch))
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        home_patch = mock.patch('pathlib.Path.home', return_value=self.root)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
         # Stop Git discovery at this disposable fixture, away from the host checkout.
         (self.root / '.git').write_text('gitdir: nonexistent\n')
         (self.root / 'agents').mkdir()

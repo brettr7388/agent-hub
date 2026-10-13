@@ -40,10 +40,16 @@ class HubCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='hub-test-', dir=str(scratch))
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
+        # Worktrees can live outside the real home; keep default fake-CLI cwd local.
+        home_patch = mock.patch('pathlib.Path.home', return_value=self.root)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
         fake_account = self.root / 'fake-source-codex-home'
         fake_account.mkdir()
         (fake_account / 'auth.json').write_text('{"fake": true}')
-        env_patch = mock.patch.dict(os.environ, {'CODEX_HOME': str(fake_account)})
+        # Keep fake CLI working directories inside the sandbox; production's
+        # default workdir falls back to Path.home() for an outside checkout.
+        env_patch = mock.patch.dict(os.environ, {'CODEX_HOME': str(fake_account), 'HOME': str(self.root)})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         (self.root / 'agents').mkdir()
@@ -79,13 +85,13 @@ class HubCase(unittest.TestCase):
         h.wfile = io.BytesIO()
         msg = email.message.Message()
         base = {'Host': '127.0.0.1:4700'}
-        if method == 'POST':
+        if method in ('POST', 'PATCH'):
             base.update({'Origin': 'http://127.0.0.1:4700', 'X-Hub-Request': '1',
                          'Content-Type': 'application/json', 'Content-Length': str(len(data))})
         base.update(headers or {})
         for k, v in base.items(): msg[k] = v
         h.headers = msg
-        h.dispatch(method == 'POST')
+        h.dispatch(method in ('POST', 'PATCH'))
         first, _, body = h.wfile.getvalue().partition(b'\r\n\r\n')
         status = int(first.splitlines()[0].split()[1])
         return status, first.decode('latin1'), body
@@ -198,8 +204,8 @@ class HubCase(unittest.TestCase):
         got = json.loads(data)
         self.assertEqual(got['chat_id'], 'agent:my-helper')
         folder = self.root / 'agents' / 'my-helper'
-        self.assertNotIn('@' + str(self.root / 'agents' / 'BOTS.md'), (folder / 'CLAUDE.md').read_text())
-        self.assertFalse(got['agent']['use_global_rules'])
+        self.assertIn('@' + str(self.root / 'agents' / 'BOTS.md'), (folder / 'CLAUDE.md').read_text())
+        self.assertTrue(got['agent']['use_global_rules'])
         self.assertEqual(json.loads((folder / '.claude' / 'settings.json').read_text())['model'], 'sonnet')
         state = json.loads(self.api('/api/state')[2])
         self.assertIn('agent:my-helper', [c['id'] for c in state['chats']])
@@ -237,7 +243,7 @@ class HubCase(unittest.TestCase):
             self.assertTrue(other.agents()['guide']['guide'])
             other.create_agent({'name': 'Researcher', 'role': 'Research carefully.', 'model': 'haiku'})
             self.assertTrue((app_root / 'agents' / 'researcher' / 'NOTES.md').is_file())
-            self.assertNotIn('@' + str(external / 'BOTS.md'), (app_root / 'agents' / 'researcher' / 'CLAUDE.md').read_text())
+            self.assertIn('@' + str(external / 'BOTS.md'), (app_root / 'agents' / 'researcher' / 'CLAUDE.md').read_text())
             self.assertTrue(other.agents()['inbox']['use_global_rules'])
             hidden = other.archive({'kind': 'agent', 'id': 'inbox'})
             self.assertTrue(hidden['external_hidden'])
@@ -254,7 +260,8 @@ class HubCase(unittest.TestCase):
         self.assertEqual(len(calls), 16)
         self.assertEqual(calls[0]['cwd'], str(self.root / 'agents' / self.aid))
         self.assertEqual(calls[0]['argv'][0:2], ['-p', 'turn 0'])
-        self.assertIn('--permission-mode', calls[0]['argv'])
+        self.assertEqual(calls[0]['argv'][calls[0]['argv'].index('--permission-mode') + 1], 'auto')
+        self.assertIn('--chrome', calls[0]['argv'])
         self.assertIn('--model', calls[0]['argv'])
         self.assertNotIn('--resume', calls[0]['argv'])
         self.assertEqual(calls[1]['argv'][calls[1]['argv'].index('--resume')+1], 'fake-1')
@@ -267,12 +274,14 @@ class HubCase(unittest.TestCase):
 
     def test_inbox_chrome_flag_and_invalid_cli_json(self):
         self.h.create_agent({'name': 'Inbox', 'role': 'Handle inbox.', 'model': 'haiku', 'use_global_rules': True,
-                             'chrome': True})
+                             'chrome': False})  # everyday Chrome needs no Pip browser or real MCP
         self.responses('inbox', [{'invalid_json': True}])
         jid = self.send('agent:inbox', 'check')['job_id']
         self.done(jid)
         call = self.calls('inbox')[0]
+        # Full-access Pips keep Claude in Chrome like a normal session (owner decision 2026-10-12).
         self.assertIn('--chrome', call['argv'])
+        self.assertNotIn('--no-chrome', call['argv'])
         row = self.h.db.execute('SELECT status,error FROM jobs WHERE id=?', (jid,)).fetchone()
         self.assertEqual(row['status'], 'error')
         self.assertIn('invalid JSON', row['error'])

@@ -1,0 +1,26 @@
+// A preload replaces http.request; the bridge must pass a Unix socketPath.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+const dir = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'pip-bridge-'));
+fs.chmodSync(dir, 0o700);
+const socket = path.join(dir, 'browser.sock');
+fs.writeFileSync(socket, ''); fs.chmodSync(socket, 0o600);
+const preload = path.join(dir, 'preload.cjs');
+fs.writeFileSync(preload, `const fs=require('node:fs');const http=require('node:http');
+const file=${JSON.stringify(socket)};const original=fs.lstatSync;
+fs.lstatSync=function(p,...rest){const st=original.call(this,p,...rest);if(String(p)===file)st.isSocket=()=>true;return st};
+http.request=function(options,cb){if(options.socketPath!==file||options.path!=='/devtools/browser/pip'||options.agent!==false)throw Error('request escaped private socket');
+return {end(){cb({statusCode:200})},on(){return this}}};`);
+const stub = path.join(dir, 'stub.mjs');
+fs.writeFileSync(stub, `import http from 'node:http';
+const req=http.request('ws://127.0.0.1:9/devtools/browser/pip',r=>process.stdout.write(String(r.statusCode)));
+req.end();`);
+const result = spawnSync(process.execPath, ['--require', preload, path.resolve(__dirname, '../hub_browser_mcp.mjs'), socket, stub], {encoding:'utf8', timeout:5000});
+assert.equal(result.status, 0, result.stderr);
+assert.equal(result.stdout, '200');
+const blocked = spawnSync(process.execPath, ['--require', preload, path.resolve(__dirname, '../hub_browser_mcp.mjs'), socket, stub, '--browser-url=http://evil'], {encoding:'utf8', timeout:5000});
+assert.notEqual(blocked.status, 0);
+assert.match(blocked.stderr, /Browser targeting flags are Hub-owned/);
+fs.rmSync(dir, {recursive:true, force:true});

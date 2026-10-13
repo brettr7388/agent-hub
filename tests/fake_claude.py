@@ -8,12 +8,22 @@ import time
 
 if '--help' in sys.argv:
     print('Fake Claude --safe-mode --setting-sources --append-system-prompt --include-partial-messages')
+    print('--permission-mode <mode> Permission mode (choices: "acceptEdits", "auto", "default", "plan")')
     sys.exit(0)
 
 cwd = Path.cwd()
 log = cwd / 'fake_calls.jsonl'
+args = sys.argv[1:]
+prompt = args[args.index('-p') + 1]
+attached = prompt.split('Attached local files:\n', 1)[-1].split('\n\n', 1)[0].splitlines() if 'Attached local files:\n' in prompt else []
+upload_dir = Path(args[args.index('--add-dir') + 1]) if '--add-dir' in args else None
+uploaded_reads = {}
+for raw in attached:
+    path = Path(raw)
+    if upload_dir and path.parent == upload_dir:
+        uploaded_reads[raw] = path.read_bytes().hex()
 with log.open('a', encoding='utf-8') as f:
-    f.write(json.dumps({'argv': sys.argv[1:], 'cwd': str(cwd)}) + '\n')
+    f.write(json.dumps({'argv': args, 'cwd': str(cwd), 'uploaded_reads': uploaded_reads}) + '\n')
 calls = log.read_text(encoding='utf-8').splitlines()
 try:
     choices = json.loads((cwd / 'fake_responses.json').read_text(encoding='utf-8'))

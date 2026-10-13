@@ -1,6 +1,7 @@
 """Instruction-boundary regressions. Only deterministic fake CLIs run."""
 import json
 import os
+import queue
 import subprocess
 import unittest
 from unittest import mock
@@ -11,7 +12,9 @@ from hub_isolation import CODEX_CONFIG
 
 
 class IsolationCase(unittest.TestCase):
-    setUp = test_hub.HubCase.setUp
+    def setUp(self):
+        test_hub.HubCase.setUp(self)
+        self.h.edit_agent({'id': 'assistant', 'private_pip': True})
     send = test_hub.HubCase.send
     done = test_hub.HubCase.done
     calls = test_hub.HubCase.calls
@@ -38,10 +41,13 @@ class IsolationCase(unittest.TestCase):
         (source / 'AGENTS.md').write_text('GLOBAL SENTINEL')
         (source / 'config.toml').write_text('model = "bad"\n')
         self.h.config['codex_bin'] = str(FAKE_CODEX)
-        self.h.create_agent({'name': 'Isolated', 'role': 'Write code.', 'engine': 'codex'})
+        self.h.create_agent({'name': 'Isolated', 'role': 'Write code.', 'engine': 'codex', 'private_pip': True})
         with mock.patch.dict(os.environ, {'CODEX_HOME': str(source)}):
             for text in ('one', 'two'):
                 self.done(self.send('agent:isolated', text)['job_id'])
+        replies = [m for m in self.h.history('agent:isolated')['messages'] if m['role'] == 'assistant']
+        self.assertEqual(len(replies), 2)
+        self.assertTrue(all(type(reply['job_id']) is int for reply in replies))
         path = self.root / 'agents' / 'isolated' / 'fake_codex_calls.jsonl'
         calls = [json.loads(line) for line in path.read_text().splitlines()]
         isolated_home = self.root / 'data' / 'codex-home-v3'
@@ -76,7 +82,7 @@ class IsolationCase(unittest.TestCase):
 
     def test_codex_mutated_config_is_restored_for_new_and_resumed_turns(self):
         self.h.config['codex_bin'] = str(FAKE_CODEX)
-        self.h.create_agent({'name': 'Mutator', 'role': 'Answer briefly.', 'engine': 'codex'})
+        self.h.create_agent({'name': 'Mutator', 'role': 'Answer briefly.', 'engine': 'codex', 'private_pip': True})
         folder = self.root / 'agents' / 'mutator'
         mutation = CODEX_CONFIG.replace('include_instructions = false', 'include_instructions = true') + (
             '\n[projects.fake]\ntrust_level = "trusted"\n[notice]\nmodel_migration_ack = true\n'
@@ -185,6 +191,43 @@ class IsolationCase(unittest.TestCase):
         self.assertFalse(history[-1]['acknowledged'])
         self.h.status(sent['job_id'], 'working')
         self.assertTrue(self.h.history(self.cid)['messages'][-1]['acknowledged'])
+
+    def test_seen_event_and_history_wait_for_cli_launch(self):
+        self.h.enqueue = lambda aid, jid: None
+        events = queue.Queue()
+        self.h.subscribers.add(events)
+        sent = self.send(text='start receipt')
+        mid, jid = sent['message_id'], sent['job_id']
+        rid = sent['request_id']
+        self.assertEqual(rid, 'request-00000001')
+        self.assertEqual(self.h.history(self.cid)['messages'][-1]['request_id'], rid)
+        self.assertFalse(self.h.history(self.cid)['messages'][-1]['acknowledged'])
+        self.h.status(jid, 'held_limit', 'waiting for retry')
+        self.assertFalse(self.h.history(self.cid)['messages'][-1]['acknowledged'])
+        self.assertFalse(any(event['kind'] == 'seen' for event in list(events.queue)))
+
+        self.h.execute(jid)
+        seen = [event for event in list(events.queue) if event['kind'] == 'seen']
+        self.assertEqual(seen, [{'kind': 'seen', 'chat_id': self.cid,
+                                 'message_id': mid, 'request_id': rid, 'job_id': jid}])
+        self.assertTrue(self.h.history(self.cid)['messages'][0]['acknowledged'])
+        self.assertIsNotNone(self.h.db.execute('SELECT started FROM jobs WHERE id=?', (jid,)).fetchone()['started'])
+        self.assertEqual(self.h.send({'chat_id': self.cid, 'text': 'start receipt', 'request_id': rid}),
+                         {'ok': True, 'duplicate': True, 'request_id': rid, 'message_id': mid})
+
+    def test_failed_cli_launch_does_not_mark_message_seen(self):
+        self.h.enqueue = lambda aid, jid: None
+        events = queue.Queue()
+        self.h.subscribers.add(events)
+        sent = self.send(text='cannot launch')
+        with mock.patch('hub.start_process', side_effect=OSError('fake launch failure')):
+            self.h.execute(sent['job_id'])
+        self.assertEqual(self.h.db.execute('SELECT status,started FROM jobs WHERE id=?',
+                         (sent['job_id'],)).fetchone()['status'], 'error')
+        self.assertIsNone(self.h.db.execute('SELECT started FROM jobs WHERE id=?',
+                          (sent['job_id'],)).fetchone()['started'])
+        self.assertFalse(self.h.history(self.cid)['messages'][0]['acknowledged'])
+        self.assertFalse(any(event['kind'] == 'seen' for event in list(events.queue)))
 
     def test_rules_reject_busy_agent_and_bad_boolean(self):
         for value in ('false', 0, None):

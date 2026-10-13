@@ -151,6 +151,7 @@ class SwarmMixin:
             result[aid] = {'id': aid, 'name': row['role'], 'emoji': '✳️',
                 'model': row['model'], 'engine': row['engine'], 'path': str(folder),
                 'cwd': row['cwd'], 'external': False, 'avatar': None, 'swarm': True,
+                **self.pip_access(aid),
                 'pip_style': self._setting('pip_style:' + aid)}
         return result
 
@@ -328,9 +329,14 @@ class SwarmMixin:
                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
                     (sid, cid, goal, shape, str(working), int(use_trees), 'working', time.time(), json.dumps(rubric), judge[0] if judge else None, source_id))
                 if source_id:
+                    # Create the original version before inserting the raw card;
+                    # otherwise _ensure_version would backfill it and attaching
+                    # the same message below would violate the unique index.
+                    self._ensure_version(source_id)
                     card = self._result_card(sid)
                     cur = self.db.execute('''INSERT INTO messages(chat_id,agent_id,role,text,created,uploads,cards)
                         VALUES(?,?,?,?,?,?,?)''', (source_id, None, 'system', '', time.time(), '[]', json.dumps([card])))
+                    self._attach_active_message(source_id, cur.lastrowid)
                     self.db.execute('UPDATE swarms SET result_message_id=? WHERE id=?', (cur.lastrowid, sid))
                 self.db.commit()
             for aid, number, role, slice_, engine, model, source_agent_id in definitions:

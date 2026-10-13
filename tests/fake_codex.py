@@ -16,11 +16,18 @@ if '--help' in args:
 if len(args) >= 2 and args[1] == 'resume' and any(flag in args for flag in ('-C', '-s', '--skip-git-repo-check', '--model')):
     print('Unsupported resume option', file=sys.stderr)
     sys.exit(2)
+if '--image' in args and (len(args) < 2 or args[-2] != '--'):
+    print('Image flag consumed prompt: missing -- separator', file=sys.stderr)
+    sys.exit(2)
 cwd = Path.cwd()
 config = Path(os.environ['CODEX_HOME']) / 'config.toml' if os.environ.get('CODEX_HOME') else None
+prompt = args[-1]
+attached = prompt.split('Attached local files:\n', 1)[-1].split('\n\n', 1)[0].splitlines() if 'Attached local files:\n' in prompt else []
+uploaded_reads = {raw: Path(raw).read_bytes().hex() for raw in attached if Path(raw).is_file()}
 with (cwd / 'fake_codex_calls.jsonl').open('a', encoding='utf-8') as f:
     f.write(json.dumps({'argv': args, 'cwd': str(cwd), 'codex_home': os.environ.get('CODEX_HOME'),
                         'home': os.environ.get('HOME'),
+                        'uploaded_reads': uploaded_reads,
                         'config': config.read_text() if config and config.is_file() else None}) + '\n')
 number = len((cwd / 'fake_codex_calls.jsonl').read_text().splitlines())
 try: choices = json.loads((cwd / 'fake_codex_responses.json').read_text())

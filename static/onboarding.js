@@ -49,7 +49,7 @@
   }
   function consent(info) {
     state.preview = null; state.results = null;
-    state.body.replaceChildren(node('p', "Agent Hub looks at what's already on this computer and suggests Pips. Nothing is sent anywhere except to your own Claude or Codex, after you review the summary."));
+    state.body.replaceChildren(node('p', "Agent Hub looks at what's already on this computer and suggests Pips. Nothing is sent to your AI provider until you review the summary and choose to send it."));
     state.body.append(node('p', 'Choose exactly what to read. Scan stays on this computer; the next screen shows the complete text before anything is sent.', 'field-help'));
     const sources = [];
     (info.sources || []).forEach((source) => {

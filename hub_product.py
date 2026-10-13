@@ -1,6 +1,7 @@
 """Durable owner-facing Hub preferences, search, and reversible archives."""
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 from urllib.parse import quote
@@ -84,25 +85,44 @@ class ProductMixin:
         return self.product_state()
 
     def search_messages(self, query):
-        q = (query.get('q') or [''])[0].strip()
+        normalize = lambda text: re.sub(r'\s+', ' ', str(text or '')).strip().casefold()
+        q = normalize((query.get('q') or [''])[0])
         if not q or len(q) > 200: return {'results': []}
         with self.lock:
+            self.db.create_function('hub_search_text', 1, normalize, deterministic=True)
+            archived_agents = {row[0] for row in self.db.execute("SELECT id FROM archives WHERE kind='agent'")}
+            visible_agents = self.agents()
+            hidden_chats = {row[0] for row in self.db.execute("SELECT id FROM archives WHERE kind='chat'")}
+            for chat in self.db.execute("SELECT id,agents FROM chats WHERE type='direct'"):
+                if any(aid in archived_agents or aid not in visible_agents for aid in json.loads(chat['agents'])):
+                    hidden_chats.add(chat['id'])
+            for chat in self.db.execute("SELECT id FROM chats WHERE type IN ('direct','group')"):
+                self._ensure_version(chat['id'])
+            self.db.commit()
+            result = []
+            title_ids = set()
+            for chat in self.db.execute('SELECT id,name FROM chats WHERE instr(hub_search_text(name),?)>0 ORDER BY id LIMIT 100', (q,)):
+                if chat['id'] in hidden_chats: continue
+                title_ids.add(chat['id'])
+                result.append({'chat_id': chat['id'], 'chat_name': chat['name'], 'message_id': None, 'text': 'Conversation'})
             rows = self.db.execute('''SELECT m.id AS message_id,m.chat_id,m.text,m.cards,m.created,c.name AS chat_name
                 FROM messages m JOIN chats c ON c.id=m.chat_id
-                WHERE instr(lower(m.text),lower(?))>0 OR instr(lower(m.cards),lower(?))>0
+                WHERE (c.type NOT IN ('direct','group') OR c.id LIKE 'group:swarm-%' OR EXISTS (
+                    SELECT 1 FROM version_messages vm JOIN chat_versions cv ON cv.id=vm.version_id
+                    WHERE vm.message_id=m.id AND cv.chat_id=m.chat_id AND cv.active=1))
+                AND (instr(hub_search_text(m.text),?)>0 OR instr(hub_search_text(m.cards),?)>0)
                 ORDER BY m.id DESC LIMIT 100''', (q, q)).fetchall()
-            result = []
             for row in rows:
-                if self.is_archived_chat(row['chat_id']): continue
+                if row['chat_id'] in hidden_chats or row['chat_id'] in title_ids: continue
                 item = dict(row)
                 cards = json.loads(item.pop('cards') or '[]')
-                if q.lower() not in item['text'].lower():
-                    found = next((card for card in cards if isinstance(card, dict) and q.lower() in
-                                  (str(card.get('title') or '') + ' ' + str(card.get('text') or '')).lower()), None)
+                if q not in normalize(item['text']):
+                    found = next((card for card in cards if isinstance(card, dict) and q in
+                                  normalize(str(card.get('title') or '') + ' ' + str(card.get('text') or ''))), None)
                     if found: item['text'] = (str(found.get('title') or '') + ' ' + str(found.get('text') or '')).strip()
                 item['text'] = strip_handoff_marker(item['text'])
                 result.append(item)
-            return {'results': result}
+            return {'results': result[:100]}
 
     def _active_chat(self, cid):
         return bool(self.db.execute("SELECT 1 FROM jobs WHERE chat_id=? AND status IN ('queued','working','typing')", (cid,)).fetchone())
@@ -118,6 +138,7 @@ class ProductMixin:
         self.db.execute('UPDATE chats SET id=? WHERE id=?', (new, old))
         for table in ('messages', 'sessions', 'jobs', 'chat_preferences'):
             self.db.execute('UPDATE ' + table + ' SET chat_id=? WHERE chat_id=?', (new, old))
+        self.db.execute('UPDATE chat_versions SET chat_id=? WHERE chat_id=?', (new, old))
         for setting in ('last_chat', 'quick_start_chat'):
             if self._setting(setting) == old:
                 self._put_setting(setting, new)
@@ -305,11 +326,13 @@ class ProductMixin:
                 result = {'ok': True, 'kind': kind, 'id': ident, 'files_preserved': True,
                           'worktrees_removed': True, 'scratch_preserved': scratch.exists(),
                           'worktree_directory_preserved': base.exists()}
+            guide_changed = self.reset_guide_proposals_for_archive(kind, ident)
             self.db.commit()
         self.emit('agents')
         self.emit('groups')
         self.emit('swarms')
         self.emit('routines')
+        if guide_changed: self.emit('message', self.guide_chat())
         return result
 
     def unarchive(self, body):
@@ -328,10 +351,10 @@ class ProductMixin:
         rid = body.get('id')
         with self.lock:
             row = self.db.execute('SELECT id FROM routines WHERE id=?', (rid,)).fetchone()
-            if not row: fail(404, 'Hub routine not found.')
+            if not row: fail(404, 'Hub schedule not found.')
             if self.db.execute("""SELECT 1 FROM routine_runs r JOIN jobs j ON j.id=r.job_id
                 WHERE r.routine_id=? AND j.status IN ('queued','working','typing')""", (rid,)).fetchone():
-                fail(409, 'Wait for the routine job to finish.')
+                fail(409, 'Wait for the scheduled job to finish.')
             self.db.execute('DELETE FROM routines WHERE id=?', (rid,))
             self.db.commit()
         self.emit('routines')

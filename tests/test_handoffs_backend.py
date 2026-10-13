@@ -188,7 +188,7 @@ class ReviewRegressions(TestCase):
 
     def test_csp_matches_inline_svg_avatar_path(self):
         _, headers, _ = self.request('/')
-        self.assertIn("img-src 'self';", headers)
+        self.assertIn("img-src 'self' blob:;", headers)
         pips = (hub.ROOT / 'static' / 'pips.js').read_text()
         self.assertNotIn('data:image/svg', pips)
         self.assertIn('<svg', pips)

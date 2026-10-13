@@ -57,10 +57,10 @@ class UIContractTests(unittest.TestCase):
         self.assertIn("setWorkerAgent(row, members[index])", script,
                       'The team task dialog should preselect agents from the open chat')
 
-    def test_inter_neutral_theme_and_static_font_floor(self):
+    def test_native_type_neutral_theme_and_static_font_floor(self):
         css = (ROOT / 'static/style.css').read_text()
         self.assertIn("font-family:Inter", css)
-        self.assertIn('--font:Inter', css)
+        self.assertIn('--font:-apple-system,"SF Pro Text"', css)
         for token in ('--bg:#fff', '--sidebar:#f9f9f9', '--text:#0d0d0d', '--muted:#6b6b6b',
                       '--line:#e5e5e5', '--r-input:10px', '--r-card:14px', '--r-pill:999px'):
             self.assertIn(token, css)
@@ -154,13 +154,13 @@ class UIContractTests(unittest.TestCase):
         self.assertIn("Connect an external approvals queue that speaks the Agent Hub approvals API — most people don't need this", html)
         self.assertIn('placeholder="http://127.0.0.1:PORT"', html)
         self.assertNotIn('4100', html)
-        self.assertIn('<h3>Connected apps</h3>', html)
+        self.assertIn('<h3>Claude and Codex sign-in</h3>', html)
         directory_rule = re.search(r'\.directory-grid-row\{([^}]+)', css).group(1)
         self.assertNotRegex(directory_rule, r'(?<!-)height:')
         self.assertIn('grid-auto-rows:auto', directory_rule)
         self.assertIn('.pip-card>.secondary,.directory-select{min-height:44px;flex-shrink:0}', css)
-        self.assertIn('.settings-tabs button{flex:1 0 auto;min-height:44px}', css)
-        self.assertIn('flex-wrap:wrap;overflow:visible;flex-shrink:0', css)
+        self.assertIn('.settings-tabs{width:100%;max-width:100%;min-width:0;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;flex-shrink:0;overscroll-behavior-x:contain}', css)
+        self.assertIn('.settings-tabs button{flex:0 0 auto;min-height:44px}', css)
         self.assertIn('.markdown-table-scroll{width:100%;max-width:100%;overflow-x:auto', css)
 
     def test_pass15_phone_layout_and_first_run_contracts(self):
@@ -170,10 +170,10 @@ class UIContractTests(unittest.TestCase):
         for name in ('general', 'schedules', 'connections', 'help'):
             self.assertIn(f'id="settings-tab-{name}" role="tab" aria-controls="settings-panel-{name}"', html)
             self.assertIn(f'id="settings-panel-{name}" role="tabpanel" aria-labelledby="settings-tab-{name}"', html)
-        self.assertIn('flex-wrap:wrap;overflow:visible;flex-shrink:0', css)
+        self.assertIn('flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;flex-shrink:0', css)
         self.assertIn('min-width:7rem;word-break:normal;overflow-wrap:normal', css)
-        self.assertIn('@media(hover:none){\n.message-actions{display:flex;opacity:1}', css)
-        self.assertIn('.message-actions button{min-width:44px;min-height:44px}', css)
+        self.assertIn('@media(hover:none){.message .message-actions{display:none}', css)
+        self.assertIn('.message-popover .reaction-button{flex:none;width:44px;height:44px;min-width:44px;min-height:44px', css)
         self.assertIn('id="i-retry"', html)
         self.assertIn('@media(max-width:600px){#chatSubtitle{display:none}}', css)
         self.assertIn('1. Open Guide · 2. Ask a question', html)
@@ -184,8 +184,10 @@ class UIContractTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Optional Node verifier is not installed; no runtime dependency')
     def test_javascript_behavior_and_syntax(self):
-        for args in (['--check', 'static/app.js'], ['--check', 'static/markdown.js'], ['--check', 'static/emoji.js'], ['--check', 'static/sw.js'], ['tests/ui_smoke.js']):
+        for args in (['--check', 'static/app.js'], ['--check', 'static/markdown.js'], ['--check', 'static/emoji.js'], ['--check', 'static/sw.js'], ['tests/ui_smoke.js'], ['tests/message_actions_smoke.js']):
             result = subprocess.run(['node'] + args, cwd=ROOT, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             if args == ['tests/ui_smoke.js']:
                 self.assertIn('UI smoke checks passed', result.stdout, 'JS checks must reach the final assertion')
+            if args == ['tests/message_actions_smoke.js']:
+                self.assertIn('message action smoke checks passed', result.stdout, 'Message action checks must reach the final assertion')

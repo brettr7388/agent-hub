@@ -61,6 +61,7 @@ class FeaturesMixin:
     def extra_post_routes(self):
         routes = self.swarm_post_routes()
         routes.update(self.onboarding_post_routes())
+        routes.update(self.browser_post_routes())
         routes.update({'/api/settings': self.save_settings, '/api/routines': self.create_routine,
                        '/api/routines/toggle': self.toggle_routine,
                        '/api/routines/delete': self.delete_routine,
@@ -72,6 +73,7 @@ class FeaturesMixin:
     def extra_get_routes(self, query):
         routes = self.swarm_get_routes(query)
         routes.update(self.onboarding_get_routes(query))
+        routes.update(self.browser_get_routes())
         routes.update({'/api/settings': self.feature_settings, '/api/routines': self.routines,
                        '/api/approvals/workspace': lambda: self.approvals_request('/api/approvals/workspace'),
                        '/api/approvals/decision': lambda: self.approvals_decision((query.get('id') or [''])[0]),
@@ -94,6 +96,7 @@ class FeaturesMixin:
                 'engines': self.engine_catalog(),
                 'default_engine': self.config.get('default_engine', 'claude'),
                 'onboarding_scan': self.config.get('onboarding_scan'),
+                'full_access_permission_mode': self.config.get('full_access_permission_mode', 'auto'),
                 'owner_name': self.config.get('owner_name') or 'You'}
 
     @staticmethod
@@ -111,6 +114,11 @@ class FeaturesMixin:
     def save_settings(self, body):
         from hub import atomic_json
         changes = {}
+        if 'full_access_permission_mode' in body:
+            mode = body['full_access_permission_mode']
+            if not isinstance(mode, str) or mode not in ('auto', 'inherit'):
+                fail(400, 'Choose Auto or Ask nothing new for Full access permission mode.')
+            changes['full_access_permission_mode'] = mode
         if 'owner_name' in body:
             name = body['owner_name']
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80: fail(400, 'Use a short display name.')
@@ -163,17 +171,20 @@ class FeaturesMixin:
         with self.lock:
             values = []
             for row in self.db.execute('SELECT * FROM routines ORDER BY rowid'):
+                started = self.db.execute('''SELECT MAX(j.started) FROM routine_runs rr
+                    JOIN jobs j ON j.id=rr.job_id WHERE rr.routine_id=? AND j.started IS NOT NULL''',
+                    (row['id'],)).fetchone()[0]
                 values.append(dict(json.loads(row['spec']), id=row['id'], enabled=bool(row['enabled']),
-                                   next_run=row['next_run'], last_run=row['last_run'], error=row['error']))
+                                   next_run=row['next_run'], last_run=started, error=row['error']))
         return {'routines': values, 'external': self.external_routines(), 'timezone': time.tzname[0],
-                'note': 'Hub must remain running. Occurrences missed by more than a minute are skipped and shown in chat; uncertain runs are never replayed. Existing launchd routines are read-only.'}
+                'note': 'Hub must remain running. Occurrences missed by more than a minute are skipped and shown in chat; uncertain runs are never replayed. Existing launchd schedules are read-only.'}
 
     def create_routine(self, body):
         spec = {k: body.get(k) for k in ('agent_id', 'name', 'prompt', 'trigger', 'time', 'minutes', 'weekday')}
         if spec['agent_id'] not in self.agents(): fail(400, 'Choose a known agent.')
-        if not isinstance(spec['name'], str) or not 1 <= len(spec['name'].strip()) <= 100: fail(400, 'Name the routine (1–100 characters).')
-        if not isinstance(spec['prompt'], str) or not 1 <= len(spec['prompt'].strip()) <= 12000: fail(400, 'Write the routine prompt.')
-        if spec['trigger'] not in ('daily', 'weekdays', 'interval', 'weekly'): fail(400, 'Unknown routine trigger.')
+        if not isinstance(spec['name'], str) or not 1 <= len(spec['name'].strip()) <= 100: fail(400, 'Name the schedule (1–100 characters).')
+        if not isinstance(spec['prompt'], str) or not 1 <= len(spec['prompt'].strip()) <= 12000: fail(400, 'Write the schedule task.')
+        if spec['trigger'] not in ('daily', 'weekdays', 'interval', 'weekly'): fail(400, 'Unknown schedule trigger.')
         if spec['trigger'] == 'interval':
             if type(spec['minutes']) is not int or not 1 <= spec['minutes'] <= 525600: fail(400, 'Use a whole number of minutes from 1 to 525600.')
         else:
@@ -183,7 +194,7 @@ class FeaturesMixin:
         with self.lock:
             self.sync_chats()
             self.db.execute('INSERT INTO routines VALUES(?,?,?,?,?,?)', (rid, json.dumps(spec), 1, next_run(spec, now), None, None))
-            self.add_message('agent:' + spec['agent_id'], spec['agent_id'], 'system', 'Routine created: ' + spec['name'])
+            self.add_message('agent:' + spec['agent_id'], spec['agent_id'], 'system', 'Schedule created: ' + spec['name'])
             self.db.commit()
         self.emit('message', 'agent:' + spec['agent_id'])
         self.emit('routines')
@@ -193,7 +204,7 @@ class FeaturesMixin:
         if type(body.get('enabled')) is not bool: fail(400, 'enabled must be true or false.')
         with self.lock:
             row = self.db.execute('SELECT * FROM routines WHERE id=?', (body.get('id'),)).fetchone()
-            if not row: fail(404, 'Routine not found.')
+            if not row: fail(404, 'Schedule not found.')
             due = next_run(json.loads(row['spec']), self.clock()) if body['enabled'] else row['next_run']
             self.db.execute('UPDATE routines SET enabled=?,next_run=?,error=NULL WHERE id=?', (int(body['enabled']), due, row['id']))
             self.db.commit()
@@ -209,14 +220,14 @@ class FeaturesMixin:
                 spec = json.loads(row['spec'])
                 aid, cid = spec['agent_id'], 'agent:' + spec['agent_id']
                 # Reserve occurrence BEFORE handing work to a process. Never catch up in a loop.
-                self.db.execute('UPDATE routines SET next_run=?,last_run=? WHERE id=?', (next_run(spec, now), now, row['id']))
+                self.db.execute('UPDATE routines SET next_run=? WHERE id=?', (next_run(spec, now), row['id']))
                 claim = self.db.execute('INSERT OR IGNORE INTO routine_runs(routine_id,due,job_id) VALUES(?,?,NULL)', (row['id'], row['next_run']))
                 if not claim.rowcount:
                     self.db.commit()
                     continue
                 self.db.commit()
                 try:
-                    if aid not in self.agents(): raise ValueError('Routine agent is unavailable.')
+                    if aid not in self.agents(): raise ValueError('Schedule Pip is unavailable.')
                     self.sync_chats()
                     if now - row['next_run'] > 60:
                         self.routine_failure(row['id'], row['next_run'], spec, 'Hub was off or unavailable')
@@ -225,8 +236,8 @@ class FeaturesMixin:
                     if active:
                         self.routine_failure(row['id'], row['next_run'], spec, 'skipped: agent already has active work')
                         continue
-                    mid = self.add_message(cid, aid, 'system', 'Routine started: ' + spec['name'])
-                    prompt = 'Scheduled routine: ' + spec['name'] + '\n' + spec['prompt'] + '\nReply with exactly SILENT if no owner-facing update is needed.'
+                    mid = self.add_message(cid, aid, 'system', 'Schedule queued: ' + spec['name'])
+                    prompt = 'Scheduled task: ' + spec['name'] + '\n' + spec['prompt'] + '\nReply with exactly SILENT if no owner-facing update is needed.'
                     cur = self.db.execute('INSERT INTO jobs(chat_id,agent_id,prompt,reply_to,status,created) VALUES(?,?,?,?,?,?)', (cid, aid, prompt, mid, 'queued', now))
                     jid = cur.lastrowid
                     self.db.execute('UPDATE routine_runs SET job_id=? WHERE routine_id=? AND due=?', (jid, row['id'], row['next_run']))

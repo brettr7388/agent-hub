@@ -3,13 +3,14 @@ import json
 from hub_process import collect_process
 
 
-def collect_output(proc, timeout, engine, on_text):
+def collect_output(proc, timeout, engine, on_text, on_event=None):
     answer = ['']
 
     def stdout_line(line):
         try: event = json.loads(line)
         except ValueError: return
         if not isinstance(event, dict): return
+        if on_event is not None: on_event(event)
         text = None
         if engine == 'claude':
             stream = event.get('event', {}) if event.get('type') == 'stream_event' else event

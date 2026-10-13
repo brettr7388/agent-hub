@@ -1,12 +1,14 @@
 """Subprocess stress harness: a segfault must fail the parent unittest."""
 import faulthandler
 import json
+import os
 from pathlib import Path
 import queue
 import sys
 import tempfile
 import threading
 import time
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hub import Hub, ROOT
@@ -17,7 +19,9 @@ def main():
     scratch = ROOT / 'data' / 'test-runs'
     scratch.mkdir(parents=True, exist_ok=True)
     # Keep each run isolated and ensure all test state is removed on failure too.
-    with tempfile.TemporaryDirectory(prefix='hub-stress-', dir=scratch) as directory:
+    with tempfile.TemporaryDirectory(prefix='hub-stress-', dir=scratch) as directory, \
+            mock.patch('pathlib.Path.home', return_value=Path(directory)), \
+            mock.patch.dict(os.environ, {'HOME': directory}):
         h = Hub(directory, {'agents_dir': 'agents', 'workers_dir': 'workers',
                            'claude_bin': str(Path(__file__).with_name('fake_claude.py')),
                            'default_engine': 'claude', 'max_parallel': 6, 'turn_timeout': 10,

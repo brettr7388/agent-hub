@@ -17,7 +17,7 @@ class GuideBackend(unittest.TestCase):
     def test_guide_first_run_once_and_archive(self):
         guide = self.h.agents()['guide']
         self.assertTrue(guide['guide'])
-        self.assertTrue(guide['draft_only'])
+        self.assertFalse(guide['draft_only'])
         self.assertEqual(guide['model'], 'haiku')
         self.assertEqual(guide['pip_style']['accessory'], 'compass')
         self.assertIn('agent:guide', self.h.product_state()['pins'])
@@ -66,10 +66,49 @@ class GuideBackend(unittest.TestCase):
         preview = self.h.react({'message_id': mid, 'emoji': '👍', 'request_id': 'guide-react-preview'})
         self.assertTrue(preview['confirmation_required'])
         self.assertEqual(len(self.h.history('agent:guide')['messages']), before)
-        self.h.react({'message_id': mid, 'emoji': '👍', 'confirm': True,
-                      'request_id': 'guide-react-confirm'})
+        result = self.h.react({'message_id': mid, 'emoji': '👍', 'confirm': True,
+                               'request_id': 'guide-react-confirm'})
+        self.assertEqual(result['guide_result']['card']['status'], 'created')
+        self.assertEqual(result['guide_result']['result']['agent']['name'], 'Writer')
         added = self.h.history('agent:guide')['messages'][before:]
         self.assertEqual([m['text'] for m in added], ['Writer was created.'])
+
+    def test_archiving_created_pip_updates_only_its_guide_receipt(self):
+        mids = []
+        for name in ('Writer', 'Editor'):
+            spec = {'action': 'create_agent', 'name': name, 'instructions': 'Help with text.'}
+            mid = self.h.add_message('agent:guide', 'guide', 'assistant',
+                '```agent-hub\n' + json.dumps(spec) + '\n```')
+            self.h.db.commit()
+            self.h.guide_proposal({'message_id': mid, 'index': 0, 'action': 'create'})
+            mids.append(mid)
+        self.h.archive({'kind': 'agent', 'id': 'writer'})
+        history = self.h.history('agent:guide')['messages']
+        receipts = [message['text'] for message in history if message['role'] == 'system']
+        self.assertIn('Creation undone.', receipts)
+        self.assertIn('Editor was created.', receipts)
+        self.assertNotIn('Writer was created.', receipts)
+        cards = {message['id']: message['cards'] for message in history}
+        self.assertEqual(cards[mids[0]][0]['status'], 'pending')
+        self.assertEqual(cards[mids[1]][0]['status'], 'created')
+
+    def test_guide_browser_proposal_instructions_include_account_and_send_rules(self):
+        from hub_guide import GUIDE_ROLE
+        self.assertIn('use only the Pip browser for accounts', GUIDE_ROLE)
+        self.assertIn('ask the owner before sending', GUIDE_ROLE)
+
+    def test_archiving_created_group_updates_its_guide_receipt(self):
+        self.h.create_agent({'name': 'Critic', 'role': 'Review text.'})
+        spec = {'action': 'create_group', 'name': 'Reviewers', 'agents': ['Assistant', 'Critic']}
+        mid = self.h.add_message('agent:guide', 'guide', 'assistant',
+            '```agent-hub\n' + json.dumps(spec) + '\n```')
+        self.h.db.commit()
+        result = self.h.guide_proposal({'message_id': mid, 'index': 0, 'action': 'create'})
+        self.h.archive({'kind': 'group', 'id': result['result']['chat']['id']})
+        history = self.h.history('agent:guide')['messages']
+        self.assertEqual(history[-1]['text'], 'Creation undone.')
+        card = next(message for message in history if message['id'] == mid)['cards'][0]
+        self.assertEqual(card['status'], 'pending')
 
     def test_first_logged_in_engine_uses_smallest_supported_model(self):
         catalog = {'claude': {'available': True, 'authenticated': 'login_required'},
@@ -80,7 +119,7 @@ class GuideBackend(unittest.TestCase):
         self.addCleanup(other.close)
         guide = next(a for a in other.agents().values() if a['guide'])
         self.assertEqual((guide['engine'], guide['model']), ('codex', 'gpt-6-luna'))
-        self.assertFalse(guide['use_global_rules'])
+        self.assertTrue(guide['use_global_rules'])
         self.assertFalse(list(other.db.execute('SELECT id FROM jobs')))
 
     def test_team_modes_only_launch_after_approval_and_edited_options_survive(self):
@@ -141,8 +180,11 @@ class GuideBackend(unittest.TestCase):
         for raw in bad:
             clean, cards = self.h.parse_guide_reply('```agent-hub\n' + raw + '\n```')
             self.assertEqual(cards, [])
-            self.assertIn('proposal', clean.lower())
-            self.assertNotIn('agent-hub', clean)
+            if raw == '{broken':
+                self.assertEqual(clean, '```agent-hub\n' + raw + '\n```')
+            else:
+                self.assertIn('proposal', clean.lower())
+                self.assertNotIn('agent-hub', clean)
 
     def test_create_edit_dismiss_and_repeat(self):
         self.cookie = self.login()

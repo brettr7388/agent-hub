@@ -99,7 +99,7 @@ class OnboardingCase(unittest.TestCase):
         made = self.h.onboarding_create(payload)
         self.assertEqual(made['status'], 'done')
         self.assertTrue(self.h.product_state()['getting_started']['completed'])
-        self.assertFalse(made['agents'][0]['use_global_rules'])
+        self.assertTrue(made['agents'][0]['use_global_rules'])
         self.assertEqual(self.h.onboarding_create(payload), made)
         self.assertEqual(json.loads((self.root / 'config.json').read_text())['onboarding_scan'], 'done')
         self.assertEqual(self.h.onboarding_skip({})['status'], 'done')

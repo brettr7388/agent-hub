@@ -61,6 +61,26 @@ class IsolationMixin:
                     cache[binary] = False
             return ['--include-partial-messages'] if cache[binary] else []
 
+    def claude_full_access_flags(self, binary):
+        """Print mode needs autonomous permissions for tools outside allow lists."""
+        with self.lock:
+            if self.config.get('full_access_permission_mode', 'auto') == 'inherit': return []
+            cache = getattr(self, '_claude_auto_support', None)
+            if cache is None:
+                cache = self._claude_auto_support = {}
+            if binary not in cache:
+                try:
+                    result = run_bounded([binary, '--help'], timeout=5,
+                                         env=allowed_agent_environment())
+                    choices = re.search(r'--permission-mode\b(?:(?!\n\s*--).)*?\bchoices\s*:\s*([^)]*)\)',
+                                        result.stdout, re.S)
+                    cache[binary] = (result.returncode == 0 and choices is not None and
+                                     'auto' in re.findall(r'[A-Za-z][A-Za-z0-9]*', choices.group(1)))
+                except (OSError, subprocess.TimeoutExpired, OutputLimitExceeded):
+                    cache[binary] = False
+            return (['--permission-mode', 'auto'] if cache[binary] else
+                    ['--permission-mode', 'acceptEdits', '--allowedTools', 'WebSearch,WebFetch'])
+
     def require_engine(self, engine, binary):
         if not shutil.which(binary):
             raise RuntimeError(engine.title() + " isn't installed or cannot be found. Open Help → Install an engine, install the CLI, then restart Agent Hub.")
@@ -68,9 +88,15 @@ class IsolationMixin:
             command = 'claude' if engine == 'claude' else 'codex login'
             raise RuntimeError(engine.title() + " isn't signed in. Open Terminal and run: " + command + ', then log in and restart Agent Hub.')
 
-    def rules_policy(self, agent):
-        # Versioned so sessions created before isolation never retain old instructions.
-        return 'global-v1' if agent.get('use_global_rules', agent.get('external', False)) else 'isolated-v3'
+    def rules_policy(self, agent, engine=None):
+        # Mode and prompt changes start a fresh session, including older sessions.
+        mode = 'private' if agent.get('private_pip') else 'full'
+        policy = 'access-v24-browser-' + mode + ('-draft' if agent.get('draft_only') else '')
+        if mode == 'full' and not agent.get('draft_only'):
+            engine = engine or agent.get('engine', 'claude')
+            policy += '-permissions-v27-' + (self.config.get('full_access_permission_mode', 'auto')
+                                             if engine == 'claude' else 'workspace-write')
+        return policy
 
     def codex_environment(self):
         """Give an isolated turn an empty Codex account with access to auth only.
@@ -140,7 +166,7 @@ class IsolationMixin:
                 except (OSError, subprocess.TimeoutExpired, OutputLimitExceeded):
                     cache[key] = False
         if not cache[key]:
-            raise RuntimeError(engine.title() + ' cannot isolate rules with this CLI version. Update the CLI in Terminal, or explicitly enable “Use my global rules” for this agent.')
+            raise RuntimeError(engine.title() + ' cannot isolate rules with this CLI version. Update the CLI in Terminal, or turn off Private Pip and Draft only.')
         if engine == 'claude':
             return ['--safe-mode']
         return ['--ignore-user-config', '--ignore-rules', '-c', 'project_doc_max_bytes=0',
@@ -162,6 +188,9 @@ class IsolationMixin:
                     value = stream.read(limit * 4).decode('utf-8', errors='replace')[:limit]
             except (HubError, OSError, ValueError):
                 continue
+            if agent.get('private_pip'):
+                # A linked folder is never rewritten just to change access.
+                value = re.sub(r'^@[^\n]*BOTS\.md\n+', '', value, flags=re.M)
             sections.append(filename + ':\n' + value)
         return '\n\n'.join(sections)
 

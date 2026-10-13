@@ -45,8 +45,9 @@ class EngineCase(unittest.TestCase):
         two = self.send('agent:coder', 'refine')['job_id']
         self.done(two)
         calls = self.codex_calls()
-        self.assertEqual(calls[0]['argv'][:2], ['exec', '--json'])
-        self.assertEqual(calls[1]['argv'][:4], ['exec', 'resume', 'thread-1', '--json'])
+        permissions = ['-s', 'workspace-write', '-c', 'approval_policy="never"']
+        self.assertEqual(calls[0]['argv'][:6], permissions + ['exec', '--json'])
+        self.assertEqual(calls[1]['argv'][:8], permissions + ['exec', 'resume', 'thread-1', '--json'])
         replies = [m['text'] for m in self.h.history('agent:coder')['messages'] if m['role'] == 'assistant']
         self.assertEqual(replies, ['first answer', 'second answer'])
         self.assertEqual(self.h.agents()['coder']['title'], 'Engineer')

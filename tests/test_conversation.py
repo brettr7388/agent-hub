@@ -133,8 +133,61 @@ class Conversation(unittest.TestCase):
         self.assertFalse(self.h.react({'message_id': answer['id'], 'emoji': '❤️'})['active'])
         self.assertFalse(self.h.react({'message_id': answer['id'], 'emoji': '❤️', 'active': False})['active'])
 
+    def test_plain_answer_thumbs_up_and_question_are_quiet_and_toggle(self):
+        with self.h.lock:
+            mid = self.h.add_message(self.cid, self.aid, 'assistant',
+                                     'To update the file, run the local command. The file has three sections.')
+            self.h.db.commit()
+        before = self.h.db.execute('SELECT count(*) FROM jobs').fetchone()[0]
+        for emoji in ('👍', '❓'):
+            body = {'message_id': mid, 'emoji': emoji, 'active': True,
+                    'request_id': 'quiet-' + str(ord(emoji[0]))}
+            result = self.h.react(body)
+            self.assertTrue(result['active'])
+            self.assertIsNone(result['job_id'])
+            self.assertEqual(self.h.react(body), result)
+            self.assertIn(emoji, self.h.history(self.cid)['messages'][-1]['reactions'])
+            self.assertFalse(self.h.react({'message_id': mid, 'emoji': emoji})['active'])
+            self.assertNotIn(emoji, self.h.history(self.cid)['messages'][-1]['reactions'])
+        self.assertEqual(self.h.db.execute('SELECT count(*) FROM jobs').fetchone()[0], before)
+        self.assertEqual(self.calls(), [])
+
+    def test_quoted_code_and_negative_offers_are_quiet(self):
+        examples = ['The example says "I can send the draft."',
+                    '```text\nI can delete the file.\n```',
+                    '> I can publish the draft.\nThis is a quote.',
+                    'I can not send the file.', 'I will never delete the file.',
+                    'I cannot send the file.', 'I propose a name for this theorem.']
+        with mock.patch.object(self.h, 'enqueue') as enqueue:
+            for text in examples:
+                with self.subTest(text=text):
+                    mid = self.h.add_message(self.cid, self.aid, 'assistant', text)
+                    self.h.db.commit()
+                    for emoji in ('👍', '❓'):
+                        result = self.h.react({'message_id': mid, 'emoji': emoji, 'active': True})
+                        self.assertIsNone(result['job_id'])
+            enqueue.assert_not_called()
+
+    def test_natural_action_proposal_reactions_still_queue(self):
+        with mock.patch('hub.threading.Timer') as timer:
+            for text in ('I can draft the reply and send it after your approval.',
+                         "I'll draft the reply once you approve.",
+                         'I’ll send it after you approve.',
+                         'I propose a draft.',
+                         'Would you like me to update the file?',
+                         'I suggest we create a new workspace.'):
+                with self.h.lock:
+                    mid = self.h.add_message(self.cid, self.aid, 'assistant', text)
+                    self.h.db.commit()
+                for emoji in ('👍', '❓'):
+                    result = self.h.react({'message_id': mid, 'emoji': emoji})
+                    self.assertIsNotNone(result['job_id'], (text, emoji))
+        self.assertEqual(timer.call_count, 12)
+        self.assertEqual(self.h.db.execute('SELECT count(*) FROM jobs WHERE reaction=1').fetchone()[0], 12)
+
     def test_group_reaction_targets_author_and_removal_cancels_queued_turn(self):
         cid = self.group()
+        self.responses('builder', [{'result': 'I can write the code once you approve.'}])
         sent = self.send(cid, '@builder Write code')
         self.done(sent['job_id'])
         answer = [m for m in self.h.history(cid)['messages'] if m['role'] == 'assistant'][0]

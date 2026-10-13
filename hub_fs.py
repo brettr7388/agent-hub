@@ -25,6 +25,7 @@ _MANAGED_DIRECTORY_NAMES = frozenset({
     'uploads', 'exports', 'teams', 'worktrees', 'agents', 'agents_dir',
     'create', 'swarms', 'groups', 'media', 'workers', 'managed-pips',
     'codex-home', 'codex-home-v3', 'linked-workspaces', 'onboarding-run',
+    'pip-browser-profile',
 })
 
 
@@ -414,7 +415,11 @@ def validate_data_tree(data):
                 elif stat.S_ISDIR(info.st_mode):
                     child = os.open(name, _DIR_FLAGS, dir_fd=fd)
                     try:
-                        walk(child)
+                        # Chrome owns its locks/socket symlinks inside this one
+                        # dedicated profile. Hub never exports or reads its files
+                        # (only descriptor-checked DevToolsActivePort).
+                        if name != 'pip-browser-profile' or fd != root:
+                            walk(child)
                     finally:
                         os.close(child)
         walk(root)
