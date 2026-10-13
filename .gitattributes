@@ -1,0 +1,7 @@
+# Local runtime data and personal agent folders must never enter git archive exports.
+/.remember/** export-ignore
+/data/** export-ignore
+/config.json export-ignore
+/agents/** export-ignore
+# Repositories may add explicitly reviewed public templates here in the future.
+/agents/templates/** -export-ignore

@@ -1,0 +1,7 @@
+data/
+config.json
+__pycache__/
+*.pyc
+.DS_Store
+.remember/
+agents/*/
