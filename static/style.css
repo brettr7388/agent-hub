@@ -653,10 +653,11 @@ h1,h2,h3,h4,h5,h6,.empty-chat h2,.message-body{letter-spacing:normal}
 .sidebar .nav-item .avatar,.app.sidebar-collapsed .nav-item .avatar{width:36px;height:36px;font-size:24px;position:relative;overflow:visible}
 .app.sidebar-collapsed .nav-item{padding:4px}
 .sidebar .avatar[data-state=working],.sidebar .avatar[data-state=thinking]{box-shadow:none}
-.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after{content:'';position:absolute;inset:-3px;border:2px solid var(--line);border-top-color:var(--text);border-radius:50%;pointer-events:none;animation:sidebar-pip-ring 1.1s linear infinite}
+.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after,.sidebar .avatar[data-state=waiting]::after{content:'';position:absolute;inset:-3px;border:2px solid var(--line);border-top-color:var(--text);border-radius:50%;pointer-events:none;animation:sidebar-pip-ring 1.1s linear infinite}
 @keyframes sidebar-pip-ring{to{transform:rotate(360deg)}}
+.sidebar .avatar[data-state=waiting]::after{opacity:.55;animation-duration:2.2s}
 @media(max-width:700px){.conversation.is-empty .empty-chat{padding:0 16px 20px}.empty-chat h2{font-size:24px}}
-@media(prefers-reduced-motion:reduce){.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after{animation:none}}
+@media(prefers-reduced-motion:reduce){.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after,.sidebar .avatar[data-state=waiting]::after{animation:none}}
 
 /* Pip access and approval requests */
 .pip-access-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
@@ -861,3 +862,7 @@ h1,h2,h3,h4,h5,h6,.empty-chat h2,.message-body{letter-spacing:normal}
 @media(max-width:700px){.message-version-control>.icon-button{width:44px;height:44px;min-width:44px;min-height:44px}.message-version-control .chat-versions summary{min-height:44px;display:grid;place-items:center}.message-version-control #chatVersionOptions button{min-height:44px}}
 /* Phone: an idle stop slot gives its room to the Pip picker instead of reserving 44px. */
 @media(max-width:700px){.stop-slot:has(>.stop-button[hidden]){flex:1 1 0;width:auto;min-width:0}}
+
+/* Opening a chat lands on the newest message without a visible scroll or slide-in. */
+.message-viewport.conversation-opening .message-list{visibility:hidden}
+.message.message-settled{animation:none}

@@ -12,6 +12,7 @@
   };
   const data = { agents: [], hiddenAgents: [], chats: [], statuses: [], messages: [], workers: null, jobs: [], setup: null, settings: null, product: null, routines: null, approvals: null, approvalsTab: 'timely', approvalsReviews: {}, swarms: [], chatId: null, creatingChatId: null, chatReady: null, replyTo: [], uploads: [], pending: false, eventSource: null, eventRetry: null, pollTimer: null, chatRequest: 0, stateRequest: 0, authenticated: false, toastTimer: null, read: {}, pinned: [], retryRequest: null, uploadLimit: 1073741824, coachStep: 0, searchTimer: null, tourAfterCreate: false, welcomeTemplate: 0, scheduleAfterCreate: null, deltas: new Map(), closedDeltas: new Set(), projectCheck: null, projectTimer: null, composeAgentId: null, teamChatId: null, swarmFocus: null, navFilter: '', navExpanded: {}, navScroll: {}, directoryKind: 'agents', directoryRole: '', directoryPage: 0, directorySelected: new Set(), proposalEdit: null, guideOpened: false };
   const storageKey = 'agent-hub-theme';
+  const themeChoiceKey = 'agent-hub-theme-choice';
   const readStorageKey = 'agent-hub-last-read';
   const pinnedStorageKey = 'agent-hub-pinned';
   const approvalsStorageKey = 'agent-hub-approvals-reviews';
@@ -219,7 +220,8 @@
     const d = displayChat(item, fallbackAgent);
     const button = el('button', `nav-item${String(data.chatId) === String(item.id) ? ' active' : ''}`);
     button.type = 'button'; button.dataset.chatId = item.id;
-    button.setAttribute('aria-label', `Open ${d.name}${fallbackAgent?.linked ? ' · Linked to an existing agent folder, read-only' : ''}`);
+    const rowLabel = `Open ${d.name}${fallbackAgent?.linked ? ' · Linked to an existing agent folder, read-only' : ''}`;
+    button.setAttribute('aria-label', rowLabel);
     if (String(data.chatId) === String(item.id)) button.setAttribute('aria-current', 'page');
     const face = avatar(d.emoji, fallbackAgent?.avatar_style === 'emoji' ? null : item.avatar || d.avatar, '', fallbackAgent);
     const colorIndex = [...String(fallbackAgent?.id || item.id)].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4;
@@ -240,10 +242,8 @@
     if (String(item.id).startsWith('group:swarm-') || item.swarm_id) copy.append(el('span', 'team-task-badge', 'Team task'));
     button.append(copy);
     const status = statusText(item.id);
-    if (status) {
-      const spinner = el('span', 'status-spinner'); spinner.setAttribute('aria-label', status); spinner.setAttribute('role', 'img');
-      button.append(spinner);
-    }
+    // The ring around the face is the only running indicator in the sidebar.
+    if (status) button.setAttribute('aria-label', `${rowLabel} · ${status}`);
     if (hasUnread(item)) {
       const dot = el('span', 'unread-dot'); dot.setAttribute('aria-label', 'Unread messages'); dot.setAttribute('role', 'img');
       button.append(dot);
@@ -527,10 +527,21 @@
     if (mobile) { ui.app.classList.add('chat-open'); if (matchMedia('(max-width: 700px)').matches && history.state?.chat !== String(id)) history.pushState({ chat: String(id) }, '', `#chat=${encodeURIComponent(id)}`); }
     ui.empty.hidden = true; ui.viewport.hidden = false; ui.composer.hidden = false;
     ui.list.replaceChildren(el('div', 'list-skeleton', 'Loading conversation…')); data.messages = [];
+    // Open at the newest message in one step: hide the list until it is scrolled, and skip the
+    // slide-in for messages that were already there.
+    ui.viewport.classList.add('conversation-opening');
     renderNav();
     const ready = refreshChat(true);
     data.chatReady = { id: String(id), promise: ready };
-    await ready;
+    try { await ready; } finally {
+      requestAnimationFrame(() => {
+        if (data.chatId === String(id)) {
+          ui.list.querySelectorAll('.message').forEach((node) => node.classList.add('message-settled'));
+          if (messageId == null) ui.viewport.scrollTop = ui.viewport.scrollHeight;
+        }
+        ui.viewport.classList.remove('conversation-opening'); parity?.updateJump();
+      });
+    }
     if (data.chatId !== String(id)) return;
     if (messageId != null) requestAnimationFrame(() => {
       const target = [...ui.list.children].find((node) => node.dataset.messageId === String(messageId));
@@ -1491,12 +1502,15 @@
     ui.offline.hidden = navigator.onLine;
     if (navigator.onLine && data.authenticated) { ui.reconnect.hidden = false; scheduleEventRefresh({ chat: true }); connectEvents(); }
   }
-  function theme(value) {
+  function theme(value, remember = false) {
     document.documentElement.dataset.theme = value;
     document.querySelector('meta[name="theme-color"]').content = value === 'light' ? '#ffffff' : '#212121';
     $('themeSettings').setAttribute('aria-label', value === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
     $('themeSettings').textContent = value === 'dark' ? 'Use light theme' : 'Use dark theme';
-    try { localStorage.setItem(storageKey, value); } catch { /* storage may be unavailable */ }
+    if (remember) try { localStorage.setItem(themeChoiceKey, value); localStorage.setItem(storageKey, value); } catch { /* storage may be unavailable */ }
+  }
+  function themeChoice() {
+    try { return localStorage.getItem(themeChoiceKey) || (localStorage.getItem(storageKey) === 'dark' ? 'dark' : null); } catch { return null; }
   }
   function closeDialog(dialog) { if (dialog.open) dialog.close(); }
   const models = { claude: ['haiku','sonnet','opus'], codex: ['gpt-6-luna','gpt-6.1-sol','gpt-6-astra'] };
@@ -2082,9 +2096,11 @@
       } catch (error) { $('modelError').textContent = errorText(error); $('modelError').hidden = false; }
       finally { form.dataset.pending = 'false'; button.disabled = false; }
     });
-    let saved; try { saved = localStorage.getItem(storageKey); } catch { /* ignore */ }
-    theme(saved === 'dark' ? 'dark' : 'light');
-    ['themeSettings'].forEach((id) => $(id).addEventListener('click', () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark')));
+    // No explicit choice: follow the device, like the ChatGPT and Claude apps.
+    const systemDark = matchMedia('(prefers-color-scheme: dark)');
+    theme(themeChoice() || (systemDark.matches ? 'dark' : 'light'));
+    systemDark.addEventListener?.('change', (event) => { if (!themeChoice()) theme(event.matches ? 'dark' : 'light'); });
+    ['themeSettings'].forEach((id) => $(id).addEventListener('click', () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true)));
     $('backButton').addEventListener('click', () => { if (history.state?.chat) history.back(); else { ui.app.classList.remove('chat-open'); renderNav(); } });
     window.addEventListener('popstate', (event) => {
       if (event.state?.chat) openChat(event.state.chat, false).then(() => ui.app.classList.add('chat-open'));

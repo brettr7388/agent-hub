@@ -1,5 +1,5 @@
-const SHELL_CACHE = 'agent-hub-shell-v35';
-const SHELL = ['/', '/index.html', '/static/style.css', '/static/onboarding.css', '/static/markdown.js', '/static/emoji.js', '/static/onboarding.js', '/static/app.js', '/static/phone.js', '/static/qr.js', '/manifest.json', '/static/logo.svg', '/static/favicon.svg', '/static/mascot.svg', '/static/pips.js', '/static/inter-latin.woff2', '/static/inter-latin-ext.woff2'];
+const SHELL_CACHE = 'agent-hub-shell-v36';
+const SHELL = ['/', '/index.html', '/static/style.css', '/static/onboarding.css', '/static/markdown.js', '/static/emoji.js', '/static/onboarding.js', '/static/app.js', '/static/phone.js', '/static/qr.js', '/static/theme-init.js', '/manifest.json', '/static/logo.svg', '/static/favicon.svg', '/static/mascot.svg', '/static/pips.js', '/static/inter-latin.woff2', '/static/inter-latin-ext.woff2'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then(async (cache) => {

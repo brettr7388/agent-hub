@@ -41,7 +41,7 @@ class PolishTests(unittest.TestCase):
             for motion in re.findall(r'(?:animation|transition):([^;}]+)', body):
                 if 'infinite' in motion:
                     self.assertIn(selector.strip(), ('.status-spinner', '.typing-bubble span',
-                        '.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after'))
+                        '.sidebar .avatar[data-state=working]::after,.sidebar .avatar[data-state=thinking]::after,.sidebar .avatar[data-state=waiting]::after'))
                     continue
                 durations = re.findall(r'([.\d]+)(ms|s)\b', motion)
                 for duration, unit in durations:

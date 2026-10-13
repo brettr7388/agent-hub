@@ -12,7 +12,7 @@
     let syncVersionControls = () => {};
     let versionResult = null;
     const atBottom = () => !Number.isFinite(ui.viewport.scrollHeight) || ui.viewport.scrollHeight - ui.viewport.scrollTop - ui.viewport.clientHeight <= 80;
-    function updateJump() { get('jumpLatest').hidden = !data.chatId || ui.viewport.hidden || atBottom(); }
+    function updateJump() { get('jumpLatest').hidden = !data.chatId || ui.viewport.hidden || ui.viewport.classList.contains('conversation-opening') || atBottom(); }
     function preserveScroll(change) {
       const pinned = atBottom(), top = ui.viewport.scrollTop;
       change();
